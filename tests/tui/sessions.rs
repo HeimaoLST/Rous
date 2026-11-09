@@ -1,91 +1,79 @@
 use super::*;
 use crate::{
-    agent::{
-        conversation::CompactionConfig,
-        journal::{JournalRecord, Replay, TaskStatus},
-        message::ImageAttachment,
+    client::{
+        SessionMetadata, SessionSummary,
+        history::{History, HistoryEntry, TaskStatus},
+        types::{InputItem, InputMessageContent, MessageRole},
     },
     frontend::tui::sessions::Sessions,
-    protocol::{InputItem, InputMessageContent, MessageRole, ReasoningText},
-    session::{
-        SessionCommand, SessionEvent,
-        store::{SessionMetadata, SessionStore, SessionSummary},
-    },
+    input::ImageAttachment,
+    session::{SessionCommand, SessionEvent},
 };
 
-pub(super) fn snapshot(title: &str) -> (SessionMetadata, Replay) {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let path = std::env::temp_dir().join(format!(
-        "saki-session-ui-{}-{}",
-        crate::agent::journal::new_id().unwrap(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::create_dir(&path).unwrap();
-    let store = SessionStore::new(path.join("sessions")).unwrap();
-    let id = store
-        .create(
-            &path,
-            "test-model",
-            "system",
-            CompactionConfig::new(1_000_000),
-        )
-        .unwrap();
-    let metadata = store.rename(&id, title).unwrap();
-    let mut loaded = store.open(&id).unwrap();
-    loaded.conversation.add_user_message("original input");
-    loaded
-        .conversation
-        .add_reasoning(vec![ReasoningText::new("inspect first")], None);
-    loaded
-        .conversation
-        .add_assistant_message("original answer".into());
-    loaded.conversation.save_history().unwrap();
-    drop(loaded);
-    let replay = store.open(&id).unwrap().replay;
-    std::fs::remove_dir_all(path).unwrap();
-    (metadata, replay)
+pub(super) fn snapshot(title: &str) -> (SessionMetadata, History) {
+    let id = crate::client::history::new_id().unwrap();
+    let metadata = crate::client::tests::metadata(&id, title);
+    let history = History {
+        history: vec![HistoryEntry::Messages {
+            items: vec![
+                InputItem::Message {
+                    role: MessageRole::User,
+                    content: InputMessageContent::Text("original input".into()),
+                },
+                InputItem::Reasoning {
+                    content: vec![crate::client::types::ReasoningText::new("inspect first")],
+                    provider_data: None,
+                },
+                InputItem::Message {
+                    role: MessageRole::Assistant,
+                    content: InputMessageContent::Text("original answer".into()),
+                },
+            ],
+        }],
+        status: TaskStatus::Unknown,
+    };
+    (metadata, history)
+}
+pub(super) fn task_snapshot(title: &str) -> (SessionMetadata, History) {
+    let (metadata, mut history) = snapshot(title);
+    history.history = vec![
+        HistoryEntry::TaskStarted {
+            task_id: "task".into(),
+            message_id: Some("input".into()),
+            configuration: None,
+        },
+        HistoryEntry::Messages {
+            items: vec![
+                InputItem::Message {
+                    role: MessageRole::User,
+                    content: InputMessageContent::Text("task question".into()),
+                },
+                InputItem::Reasoning {
+                    content: vec![crate::client::types::ReasoningText::new("task thought")],
+                    provider_data: None,
+                },
+                InputItem::Message {
+                    role: MessageRole::Assistant,
+                    content: InputMessageContent::Text("task answer".into()),
+                },
+            ],
+        },
+        HistoryEntry::TaskFinished {
+            task_id: "task".into(),
+            status: TaskStatus::Completed,
+            error: None,
+        },
+    ];
+    history.status = TaskStatus::Completed;
+    (metadata, history)
 }
 
-pub(super) fn task_snapshot(title: &str) -> (SessionMetadata, Replay) {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let path = std::env::temp_dir().join(format!(
-        "saki-session-task-{}-{}",
-        crate::agent::journal::new_id().unwrap(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::create_dir(&path).unwrap();
-    let store = SessionStore::new(path.join("sessions")).unwrap();
-    let id = store
-        .create(
-            &path,
-            "test-model",
-            "system",
-            CompactionConfig::new(1_000_000),
-        )
-        .unwrap();
-    let metadata = store.rename(&id, title).unwrap();
-    let mut loaded = store.open(&id).unwrap();
-    loaded.conversation.begin_task().unwrap();
-    loaded.conversation.add_user_message("task question");
-    loaded
-        .conversation
-        .add_reasoning(vec![ReasoningText::new("task thought")], None);
-    loaded
-        .conversation
-        .add_assistant_message("task answer".into());
-    loaded.conversation.finish_task(None).unwrap();
-    drop(loaded);
-    let replay = store.open(&id).unwrap().replay;
-    std::fs::remove_dir_all(path).unwrap();
-    (metadata, replay)
-}
-
-pub(super) fn idle_state(id: &str) -> crate::session::runtime::SessionState {
-    crate::session::runtime::SessionState {
+pub(super) fn idle_state(id: &str) -> crate::client::SessionState {
+    crate::client::SessionState {
         session_id: id.to_owned(),
         metadata: None,
         loaded: true,
-        state: "idle",
+        state: "idle".into(),
         unavailable: None,
         active_task: None,
         status: "idle".to_owned(),
@@ -95,7 +83,7 @@ pub(super) fn idle_state(id: &str) -> crate::session::runtime::SessionState {
     }
 }
 
-pub(super) fn opened(metadata: SessionMetadata, replay: Replay) -> SessionEvent {
+pub(super) fn opened(metadata: SessionMetadata, replay: History) -> SessionEvent {
     let state = idle_state(&metadata.id);
     SessionEvent::Opened {
         metadata,
@@ -135,7 +123,7 @@ fn switching_restores_drafts_images_reading_position_and_thought_expansion() {
         record: 1,
         offset: 0,
     });
-    editor.set_draft(crate::agent::message::UserMessage {
+    editor.set_draft(crate::input::UserInput {
         context: Vec::new(),
         text: "unsent A draft".into(),
         images: vec![ImageAttachment::new("a.png", "data:image/png;base64,AA")],
@@ -161,7 +149,7 @@ fn switching_restores_drafts_images_reading_position_and_thought_expansion() {
     );
     assert!(!format!("{:?}", app.records).contains("must not appear"));
     // Reopening reads disk again; preserve view state while accepting new history.
-    a_history.history.push(JournalRecord::Messages {
+    a_history.history.push(HistoryEntry::Messages {
         items: vec![InputItem::Message {
             role: MessageRole::Assistant,
             content: InputMessageContent::Text("external new answer".into()),
@@ -254,7 +242,7 @@ fn picker_is_on_demand_and_busy_switching_preserves_the_draft() {
         &mut editor,
         SessionEvent::Error {
             operation: "open",
-            error: crate::session::runtime::RuntimeError::new("not_found", "cannot open target"),
+            error: crate::client::RuntimeError::new("not_found", "cannot open target"),
         },
     );
     assert_eq!(app.session.as_ref().unwrap().id, metadata.id);
@@ -546,7 +534,7 @@ fn picker_rename_target_stays_stable_across_title_updates() {
 fn picker_search_preserves_draft_images_and_reading_position() {
     let (mut sessions, mut app, mut editor) =
         listed(vec![picker_summary("id-a", "alpha", "model", "/a")]);
-    editor.set_draft(crate::agent::message::UserMessage {
+    editor.set_draft(crate::input::UserInput {
         context: Vec::new(),
         text: "keep this draft".into(),
         images: vec![ImageAttachment::new("a.png", "data:image/png;base64,AA")],
@@ -683,8 +671,8 @@ fn session_switch_never_caches_a_path_completion_popup() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-fn association(id: &str, task: &str) -> crate::session::runtime::Association {
-    crate::session::runtime::Association {
+fn association(id: &str, task: &str) -> crate::client::Association {
+    crate::client::Association {
         session_id: id.to_owned(),
         task_id: task.to_owned(),
         message_id: format!("{task}-message"),
@@ -693,12 +681,12 @@ fn association(id: &str, task: &str) -> crate::session::runtime::Association {
 
 fn opened_stream(
     metadata: SessionMetadata,
-    replay: Replay,
-    stream: crate::session::runtime::Association,
+    replay: History,
+    stream: crate::client::Association,
 ) -> SessionEvent {
     let mut state = idle_state(&metadata.id);
-    state.state = "running";
-    state.active_task = Some(crate::session::runtime::ActiveTaskState {
+    state.state = "running".into();
+    state.active_task = Some(crate::client::types::ActiveTaskState {
         task_id: stream.task_id.clone(),
         message_id: stream.message_id.clone(),
         cancel_requested: false,
@@ -717,9 +705,9 @@ fn opened_stream(
     }
 }
 
-fn finished(status: &'static str) -> crate::session::runtime::TaskFinished {
-    crate::session::runtime::TaskFinished {
-        status,
+fn finished(status: &'static str) -> crate::client::TaskFinished {
+    crate::client::TaskFinished {
+        status: status.into(),
         error: None,
         persistence: None,
         history_required: false,
@@ -739,7 +727,7 @@ fn cached_live_a_survives_view_b_and_return_before_finished() {
         &mut app,
         &mut editor,
         live.clone(),
-        &crate::agent::message::UserMessage::text("A is running"),
+        &crate::input::UserInput::text("A is running"),
     );
     assert!(app.running);
     let delta = |item: &str, value: &str| SessionEvent::Agent {
@@ -805,7 +793,7 @@ fn reused_item_and_call_ids_do_not_cross_accepted_tasks() {
         &mut app,
         &mut editor,
         first.clone(),
-        &crate::agent::message::UserMessage::text("first"),
+        &crate::input::UserInput::text("first"),
     );
     sessions.apply_event_with_association(
         &mut app,
@@ -837,7 +825,7 @@ fn reused_item_and_call_ids_do_not_cross_accepted_tasks() {
         &mut app,
         &mut editor,
         second.clone(),
-        &crate::agent::message::UserMessage::text("second"),
+        &crate::input::UserInput::text("second"),
     );
     sessions.apply_event_with_association(
         &mut app,
@@ -908,7 +896,7 @@ fn stale_finished_cannot_finish_a_newer_task_and_history_repair_does_not_select(
         &mut app,
         &mut editor,
         first.clone(),
-        &crate::agent::message::UserMessage::text("first"),
+        &crate::input::UserInput::text("first"),
     );
     sessions.apply_event_with_association(
         &mut app,
@@ -921,7 +909,7 @@ fn stale_finished_cannot_finish_a_newer_task_and_history_repair_does_not_select(
         &mut app,
         &mut editor,
         second.clone(),
-        &crate::agent::message::UserMessage::text("second"),
+        &crate::input::UserInput::text("second"),
     );
     sessions.apply_event_with_association(
         &mut app,
@@ -964,13 +952,13 @@ fn stale_finished_cannot_finish_a_newer_task_and_history_repair_does_not_select(
     sessions.apply_event_with_association(
         &mut app,
         &mut editor,
-        SessionEvent::Finished(crate::session::runtime::TaskFinished {
-            status: "failed",
-            error: Some(crate::session::runtime::RuntimeError::new(
+        SessionEvent::Finished(crate::client::TaskFinished {
+            status: "failed".into(),
+            error: Some(crate::client::RuntimeError::new(
                 "model_error",
                 "late failure",
             )),
-            persistence: Some("unconfirmed"),
+            persistence: Some("unconfirmed".into()),
             history_required: true,
         }),
         Some(second),
@@ -995,13 +983,13 @@ fn cancel_acknowledgment_never_finishes_the_task() {
         &mut app,
         &mut editor,
         live.clone(),
-        &crate::agent::message::UserMessage::text("run"),
+        &crate::input::UserInput::text("run"),
     );
     sessions.apply_event_with_association(
         &mut app,
         &mut editor,
         SessionEvent::Cancelled {
-            status: "requested",
+            status: "requested".into(),
         },
         Some(live.clone()),
     );
@@ -1010,7 +998,7 @@ fn cancel_acknowledgment_never_finishes_the_task() {
         &mut app,
         &mut editor,
         SessionEvent::Cancelled {
-            status: "not_running",
+            status: "not_running".into(),
         },
         Some(live.clone()),
     );
@@ -1030,7 +1018,7 @@ fn full_message_association_guards_agent_and_finished() {
         &mut app,
         &mut editor,
         live.clone(),
-        &crate::agent::message::UserMessage::text("run"),
+        &crate::input::UserInput::text("run"),
     );
     let mut stranger = live.clone();
     stranger.message_id = "different-message".into();
@@ -1073,7 +1061,7 @@ fn duplicate_finished_and_canonical_repair_keep_error_and_persistence_visible() 
         &mut app,
         &mut editor,
         live.clone(),
-        &crate::agent::message::UserMessage::text("run"),
+        &crate::input::UserInput::text("run"),
     );
     sessions.apply_event_with_association(
         &mut app,
@@ -1091,13 +1079,13 @@ fn duplicate_finished_and_canonical_repair_keep_error_and_persistence_visible() 
         },
         Some(live.clone()),
     );
-    let failed = crate::session::runtime::TaskFinished {
-        status: "failed",
-        error: Some(crate::session::runtime::RuntimeError::new(
+    let failed = crate::client::TaskFinished {
+        status: "failed".into(),
+        error: Some(crate::client::RuntimeError::new(
             "model_error",
             "canonical failure",
         )),
-        persistence: Some("unconfirmed"),
+        persistence: Some("unconfirmed".into()),
         history_required: true,
     };
     sessions.apply_event_with_association(
@@ -1140,11 +1128,11 @@ fn full_request_queue_rejects_without_tracking() {
     let rejected = requests.try_send(
         SessionCommand::Send {
             session_id: "s".into(),
-            message: crate::agent::message::UserMessage::text("draft"),
+            message: crate::input::UserInput::text("draft"),
         },
         PendingRequest::Send {
             session_id: "s".into(),
-            message: crate::agent::message::UserMessage::text("draft"),
+            message: crate::input::UserInput::text("draft"),
         },
     );
     assert!(
@@ -1178,7 +1166,7 @@ fn same_current_opened_with_stream_preserves_live_app_editor_and_theme() {
         &mut app,
         &mut editor,
         live.clone(),
-        &crate::agent::message::UserMessage::text("run"),
+        &crate::input::UserInput::text("run"),
     );
     sessions.apply_event_with_association(
         &mut app,

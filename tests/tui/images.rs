@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::message::{ImageAttachment, UserMessage};
+use crate::input::{ImageAttachment, UserInput};
 
 fn image(name: &str) -> ImageAttachment {
     ImageAttachment::new(name, format!("data:image/png;base64,{}", "QUJD"))
@@ -185,7 +185,7 @@ fn truncated_image_failure_keeps_the_existing_draft_and_attachments() {
 #[test]
 fn user_message_history_keeps_attachments_across_recall() {
     let mut app = App::new();
-    let message = UserMessage {
+    let message = UserInput {
         context: Vec::new(),
         text: "text".to_owned(),
         images: vec![image("history.png")],

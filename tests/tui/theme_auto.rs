@@ -1,7 +1,7 @@
 use super::*;
-use crate::agent::message::{ImageAttachment, UserMessage};
 use crate::frontend::tui::sessions::Sessions;
 use crate::frontend::tui::theme::Theme;
+use crate::input::{ImageAttachment, UserInput};
 use ratatui::style::Color;
 
 #[test]
@@ -14,7 +14,7 @@ fn palette_update_repaints_and_preserves_reading_state() {
     });
     editor.insert_str("kept draft");
     editor.insert_image(ImageAttachment::new("a.png", "data:image/png;base64,AA"));
-    app.history.push(UserMessage {
+    app.history.push(UserInput {
         context: Vec::new(),
         text: "earlier".to_owned(),
         images: Vec::new(),

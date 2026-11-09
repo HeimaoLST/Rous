@@ -1,23 +1,33 @@
-# SAKI TUI：设计与首版实现
+# Rous：终端产品与实现
 
-下一版显示层次和视觉规范见 [TUI style](tui-style.md)，Pi／Codex 的对应源码分析见 [Terminal presentation](../research/systems/terminal-presentation.md)。TUI style 实验已于 2026-10-14 实现（主题、正文宽度、Markdown 表格、Activity 分组），本节继续描述已实现行为。
+下一版显示层次和视觉规范见 [TUI style](tui-style.md)，Pi／Codex 的对应源码分析见 [Terminal presentation](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/research/systems/terminal-presentation.md)。TUI style 实验已于 2026-10-14 实现（主题、正文宽度、Markdown 表格、Activity 分组），本节继续描述已实现行为。
 
-更新日期：2026-10-23。首版已采用“工作记录”布局、Ratatui 原生组件和独立终端前端。Pi 负责具体实现，Codex 负责分阶段审查与独立验收。此前的布局和组件研究见 [Terminal UI 研究](../research/systems/terminal-ui.md)，HTML 对比稿仍保留为设计材料。
+更新日期：2026-11-09。原始首版记录日期为 2026-10-23。首版已采用“工作记录”布局、Ratatui 原生组件和独立终端前端。Pi 负责具体实现，Codex 负责分阶段审查与独立验收。此前的布局和组件研究见 [Terminal UI 研究](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/research/systems/terminal-ui.md)，HTML 对比稿仍保留为设计材料。
 
 ## 目标与当前能力
 
 让用户在长任务中容易理解正在发生什么、找到结论、查看执行依据并继续输入。SAKI 的识别度来自长期协作中的一致行为和清晰的信息组织，界面为这种关系提供承载。
 
-当前 [Agent](../../src/agent/mod.rs) 保留唯一模型与工具执行循环，通过事件报告执行过程；它不读取终端、不打印界面，也不依赖 TUI。四工具、compact 与 overflow recovery 的执行职责仍在原模块。TUI 已支持多行编辑、工作记录、工具展开、基础 Markdown、原文复制、有界日志浏览、流式正文和浅灰色推理内容（结束后自动折叠，可手动展开）；运行中用户消息队列尚未实现；主动取消已实现并验收（见“实际验收”）。流式调用与失败语义见 [模型调用分层](model-runtime.md#流式响应契约)。
+当前 Rous 是独立 Git 仓库中的终端客户端。Saki 是独立进程，拥有唯一模型与工具执行循环。协议权威见 [Saki Runtime API](https://github.com/HeimaoLST/Saki/blob/dev/docs/design/runtime-api.md)。Rous 保留多行编辑、图片输入、主题、工作记录、Markdown、工具展开、复制、草稿、会话选择与取消交互，不在客户端重建执行状态机。
+
+### 2026-11-09 独立产品实现事实
+
+- `src/app.rs` 只选择前端和外部 Runtime，使用 `SAKI_RUNTIME_BIN` 或 PATH 中的 `Saki`。`src/client/mod.rs` 持续读取 stdio，以请求 ID 路由 response，按会话、任务和消息 ID 投递 event。每个 Rous 拥有一个子进程，连接断开后的 EOF/shutdown 收尾仍由 Saki 执行。
+- `src/session/terminal.rs` 将公开 RPC 适配为 UI packet。Send 的 Accepted 先于该任务的 UI 事件；查看其他会话不取消当前任务。metadata invalidation 触发公开查询，标题由 Saki 生成。`history_required` 在 Finished 前通过公开 snapshot 修复显示。
+- `src/client/history.rs` 只保留显示记录与状态，不包含 journal 字节偏移、写入修复、Conversation、provider 或存储 replay。运行中重新打开会话时，`before_task_id` 返回的前缀状态按前缀的语义记录计算。
+- 客户端事件积压受 8 MiB 字节预算约束，不因第 129 个小事件断连。写入失败或超时会关闭可能损坏的 stdin，并返回 `delivery_unknown`；仅响应超时保留完整连接，不自动重发。启动预算为 45 秒，启动失败回收子进程与 stdout/stderr reader。
+- `src/session/channel.rs` 的局部展示关闭信号独立于执行核心。异步入队超时、超大投影或关键回执无法入队后，展示永久关闭、排队投影作废，后续发送拒绝。manager 停止接纳并正常 drain 已接受的 Runtime 工作；保留 receiver 不会掩盖失效，也不会自动恢复不完整显示。
+- 旧 UI 测试使用公开 DTO fixture；两个图片路径分类测试在 `tests/input/mod.rs` 承接。原四个混合 session 场景由 `client::tests::real_runtime_contract` 通过真正的 Saki 子进程覆盖。旧手工构造 SessionStore 的 demo fixture 已退役，普通渲染与输入测试保留。
+- 迁移验证使用本地受控 provider、真实 stdio 子进程及 PTY。历史物理终端、剪贴板、模型或真人报告不能直接算作本次验证；原 MVP 未完成状态不变。
 
 ## 首版使用与模块边界
 
 ```sh
 # stdin 和 stdout 都是终端时默认进入 TUI
-cargo run
+SAKI_RUNTIME_BIN=/absolute/path/to/Saki cargo run --bin rous
 
-# 不使用 TUI，运行同一个 Agent
-SAKI_UI=console cargo run
+# 使用同一外部服务的 console 客户端
+SAKI_UI=console SAKI_RUNTIME_BIN=/absolute/path/to/Saki cargo run --bin rous
 ```
 
 不设置 `SAKI_UI` 时，管道和重定向自动使用 console。显式 `SAKI_UI=tui` 要求 stdin/stdout 都是终端，否则返回错误。
@@ -25,13 +35,14 @@ SAKI_UI=console cargo run
 | 模块 | 职责 |
 | --- | --- |
 | [main.rs](../../src/main.rs) | 模块声明与启动 `app::run` |
-| [app.rs](../../src/app.rs) | 模型、工具、Conversation 初始化，选择前端并连接通道 |
-| [agent/mod.rs](../../src/agent/mod.rs) | `handle_user_message` 执行业务；worker 顺序接收消息并发送完成／失败事件 |
-| [agent/message.rs](../../src/agent/message.rs) | 前端共用的文字／图片消息与附件快照，不依赖 TUI |
+| [app.rs](../../src/app.rs) | 选择前端、启动外部 Runtime 并等待收尾 |
+| [client/mod.rs](../../src/client/mod.rs) | 子进程、公开 stdio DTO、请求 ID 路由与字节预算 |
+| [input.rs](../../src/input.rs) | 前端文字、图片、附件快照与输入分类 |
+| [session/terminal.rs](../../src/session/terminal.rs) | 公开协议到 UI packet 的适配 |
 | [frontend/console.rs](../../src/frontend/console.rs) | 永久保留的纯文本前端，EOF 后仍消费当前结果 |
 | [frontend/tui/](../../src/frontend/tui/) | 输入、展示状态、Markdown、记录排版、日志浏览和终端恢复 |
 
-依赖从前端指向 Agent 事件契约，Agent 不反向依赖 console 或 TUI。前端不持有 Conversation、ToolRegistry 或模型客户端；不附加事件接收方时，`handle_user_message` 仍能直接调用。图片输入的操作、消息契约和压缩方式见 [图片输入](multimodal-input.md)。
+依赖方向为前端 → terminal adapter → 公开协议客户端 → Saki 进程。Rous 不持有 Agent、Conversation、ToolRegistry 或模型客户端。Runtime 配置和存储属于 Saki，Rous 保留现有配置名与数据路径。下面的交互规范仍适用；带旧日期、旧 commit 和验收数字的段落是历史记录。未随产品导出的研究和核心源码链接固定到原始候选。
 
 | 操作 | 行为 |
 | --- | --- |
@@ -147,7 +158,7 @@ Agent 通过 `ContextUpdated` 在 worker 启动、用户提交、响应 usage、
 
 2026-10-12 底栏精简：101 项 TUI 回归通过，覆盖比例／容量靠左、模型靠右、不同宽度操作入口、未知值、动态容量与 Help 详细信息；格式检查通过。此次仅调整展示布局与格式，复用已有计数与事件，不改自动压缩策略。
 
-2026-10-11 普通拖选与粘贴修复：串行全量测试通过（主程序 158 项、成长实验 34 项），格式／编译／构建通过。新增回归覆盖宽字符半格拖选、组合字形、高亮、反向跨行复制、复制保留草稿、元数据更新与 resize／内容变化、滚动中止选择，以及从记录／帮助粘贴返回输入。真实 Ghostty → tmux → SAKI 验证普通无修饰键拖选自动复制、原生 Shift 选择与复制、⌘V 多行粘贴、滚轮／方向键、正常退出；完整系统剪贴板内容与窗口焦点恢复。证据位于 `.saki/verification/clipboard-vision/`。同期将本地 `.env` 的模型切为原生图片入口 `opencode-go/deepseek-v4.1-flash`，实际图文验证与旧入口代读的区别见 [图片输入](multimodal-input.md#原生视觉与网关代读)。
+2026-10-11 普通拖选与粘贴修复：串行全量测试通过（主程序 158 项、成长实验 34 项），格式／编译／构建通过。新增回归覆盖宽字符半格拖选、组合字形、高亮、反向跨行复制、复制保留草稿、元数据更新与 resize／内容变化、滚动中止选择，以及从记录／帮助粘贴返回输入。真实 Ghostty → tmux → SAKI 验证普通无修饰键拖选自动复制、原生 Shift 选择与复制、⌘V 多行粘贴、滚轮／方向键、正常退出；完整系统剪贴板内容与窗口焦点恢复。证据位于 `.saki/verification/clipboard-vision/`。同期将本地 `.env` 的模型切为原生图片入口 `opencode-go/deepseek-v4.1-flash`，实际图文验证与旧入口代读的区别见 [图片输入](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/design/multimodal-input.md#原生视觉与网关代读)。
 
 2026-10-11 状态栏与英文文案调整：格式、编译、构建和串行全量测试通过（主程序 154 项、成长实验 34 项）。新增行为验证包括启动时模型／真实配置容量、上游 usage 校准后的工具结果增量、无 usage 响应继续估算、compact 后立即替换占用、未知值、不同宽度状态栏以及 metadata 不触发未读提示。独立 tmux 对模型／上下文、帮助、执行中复制、回看和新结果、24×8／12×4 缩放通过；输入、四工具／compact／API 失败恢复和图片剪贴板回归另行通过。证据聚合于 `.saki/verification/tui-statusline/`，本轮使用受控 HTTP 响应与实际工具／终端交互，没有追加真实模型请求。
 
@@ -173,11 +184,11 @@ Agent 通过 `ContextUpdated` 在 worker 启动、用户提交、响应 usage、
 
 用户进一步要求实际测试 tmux。已用当前 Ghostty 1.3.1 的 [AppleScript 接口](https://ghostty.org/docs/features/applescript) 新建独立窗口，附着独立 tmux 会话运行实际二进制，完成 Ghostty→tmux→SAKI 全路径验证：鼠标滚轮、记录方向键、普通拖选被捕获、Shift 拖选进行原生选择、包含中文／emoji／组合字符的可见文本复制、多行原生粘贴保持草稿及 Enter 后请求原文。复制与粘贴调用当前 ⌘C／⌘V 绑定对应的 Ghostty 原生 action（`copy_to_clipboard:mixed`／`paste_from_clipboard`），没有用 System Events 模拟物理按键；Shift 拖选使用 Ghostty 鼠标事件接口。原剪贴板与窗口焦点恢复，测试窗口／会话关闭，用户原会话没有输入或重启。结果见 `tui-polish/ghostty-smoke-result.json`，脚本 `ghostty-smoke.py`。
 
-当前验收平台为 macOS + tmux。中文文本、emoji 与组合字符已验证；真实输入法候选窗、其他终端及平台尚未验证。表格排版、Activity 分组、主题切换、窄屏底栏、bracketed paste、Ctrl+C 与终端恢复到 2026-10-14 已在隔离 tmux 会话中通过真实二进制验收；原生主题实现改由 Termina 统一输入读取：启动采样 OSC 10/11 并订阅 mode2031/CSI ?997，正文继承终端前景，衍生 palette 从采样 fg/bg 推导；palette 变化清空缓存布局，会话切换保留 live 颜色。物理 OS／Ghostty 外观切换与系统剪贴板仍未验证；本轮已通过真实 Magpie 网关的问候与自动标题冒烟，但不声称覆盖完整物理 Ghostty 交互或真实模型工具链；Termina 0.3.3 的 `rgba:` 回复与 ignored-SIGHUP 断开场景是已知边界；代码语法高亮仍留待后续；主动取消已实现并验收（见“实际验收”）；会话区跨 viewport 选择已实现，日志跨文件页选择不在范围内；会话恢复与选择器、本地命令和补全现已实现，见[会话管理](session-management.md)与[命令系统](command-system.md)。
+当前验收平台为 macOS + tmux。中文文本、emoji 与组合字符已验证；真实输入法候选窗、其他终端及平台尚未验证。表格排版、Activity 分组、主题切换、窄屏底栏、bracketed paste、Ctrl+C 与终端恢复到 2026-10-14 已在隔离 tmux 会话中通过真实二进制验收；原生主题实现改由 Termina 统一输入读取：启动采样 OSC 10/11 并订阅 mode2031/CSI ?997，正文继承终端前景，衍生 palette 从采样 fg/bg 推导；palette 变化清空缓存布局，会话切换保留 live 颜色。物理 OS／Ghostty 外观切换与系统剪贴板仍未验证；本轮已通过真实 Magpie 网关的问候与自动标题冒烟，但不声称覆盖完整物理 Ghostty 交互或真实模型工具链；Termina 0.3.3 的 `rgba:` 回复与 ignored-SIGHUP 断开场景是已知边界；代码语法高亮仍留待后续；主动取消已实现并验收（见“实际验收”）；会话区跨 viewport 选择已实现，日志跨文件页选择不在范围内；会话恢复与选择器、本地命令和补全现已实现，见[会话管理](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/design/session-management.md)与[命令系统](command-system.md)。
 
 ### 输入框优化验收
 
-2026-10-08 按 [Codex 输入研究](../research/systems/terminal-ui.md#7-codex-输入框的编辑手感) 完成快捷编辑、当前进程输入历史与视觉行导航。生产变更限于 `src/frontend/tui/`；Editor 负责文本、光标、单条删除缓冲和唯一换行布局，App 持有 InputHistory，前端继续通过原通道提交消息，Agent／Conversation／worker 不增加 UI 依赖。
+2026-10-08 按 [Codex 输入研究](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/research/systems/terminal-ui.md#7-codex-输入框的编辑手感) 完成快捷编辑、当前进程输入历史与视觉行导航。生产变更限于 `src/frontend/tui/`；Editor 负责文本、光标、单条删除缓冲和唯一换行布局，App 持有 InputHistory，前端继续通过原通道提交消息，Agent／Conversation／worker 不增加 UI 依赖。
 
 审查修正了软换行片段末尾与下一片段首位重合造成的光标停滞、resize 后旧目标列越界，以及标点上的组合音标被按词删除拆开的边界。永久回归覆盖 Unicode、跨行删除与恢复、无操作删除不覆盖缓冲、历史召回后编辑、忙时清空、日志关闭优先级、满宽末尾与宽窄切换。`cargo fmt --check`、`cargo check --all-targets`、`cargo build` 与全量测试通过：128 个主程序测试、29 个实验模块测试。
 
@@ -232,7 +243,7 @@ SAKI 的结果与判断
 
 工具严格按实际发生顺序展示，保留公开中间说明；首版不自动生成“调查／修改／验证”等语义阶段，也不为布局额外请求 LLM。题目可以沿用用户请求的首行；长内容省略显示时仍能查看原文。
 
-失败是历史事实。后续任务成功不删除此前失败；“已修复”只能来自明确后续验证或公开说明，不能把任意 shell exit 0 当成业务验证通过。此前 Magpie 实测出现命令末尾 echo 掩盖退出码，详见 [builtin tools 验收](builtin-tools.md)。
+失败是历史事实。后续任务成功不删除此前失败；“已修复”只能来自明确后续验证或公开说明，不能把任意 shell exit 0 当成业务验证通过。此前 Magpie 实测出现命令末尾 echo 掩盖退出码，详见 [builtin tools 验收](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/design/builtin-tools.md)。
 
 ### 双栏工作台
 
@@ -297,7 +308,7 @@ SAKI 的结果与判断
 | 可变高度记录列表 | 原生组件组合，按需实现记录视图 | 明确跟随底部、折叠后锚点与长消息的可见区域渲染 |
 | 有界详情滚动 | 原生 Paragraph／Scrollbar | 不把全部长期历史渲染成一个大缓冲 |
 
-已研究的 ratatui-textarea、tui-markdown、tui-widget-list 保留为能力与实现参考，并未确定引入。若后续需要专用依赖，再依据实际缺口评估。旧 tui-textarea 0.7.0 依赖 Ratatui 0.29；不能直接按旧教程加入 0.30 技术栈。源码与版本证据见 [Terminal UI 组件研究](../research/systems/terminal-ui.md#5-rust-技术栈与组件核对)。
+已研究的 ratatui-textarea、tui-markdown、tui-widget-list 保留为能力与实现参考，并未确定引入。若后续需要专用依赖，再依据实际缺口评估。旧 tui-textarea 0.7.0 依赖 Ratatui 0.29；不能直接按旧教程加入 0.30 技术栈。源码与版本证据见 [Terminal UI 组件研究](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/research/systems/terminal-ui.md#5-rust-技术栈与组件核对)。
 
 第一版使用原生组件组合工作记录、工具组、输入区与状态栏。应用状态留在 TUI 中；只有具备明确复用价值的渲染和交互职责才提取为自己的组件，首先与 TUI 源码聚合维护。出现多处实际复用后再决定是否独立成组件库，不预先设计通用控件框架或发布独立 crate。
 
@@ -315,7 +326,7 @@ Crossterm 官方禁止把 EventStream 与 read/poll 混用。推荐 UI 使用 Ev
 
 ### Codex 参考：组件职责与交互机制
 
-已检查 Codex 固定源码版本，详细证据见 [Codex 组件研究](../research/systems/terminal-ui.md#6-codex-的自有组件与交互机制)。下列是待验证的实现建议，维持 Ratatui 原生组件优先的决定。
+已检查 Codex 固定源码版本，详细证据见 [Codex 组件研究](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/research/systems/terminal-ui.md#6-codex-的自有组件与交互机制)。下列是待验证的实现建议，维持 Ratatui 原生组件优先的决定。
 
 - 将文本编辑状态与提交任务分开管理；中文编辑按 grapheme 与 cell 宽度处理，粘贴中的换行不触发提交。
 - 将工具调用作为可更新记录，以 call_id 路由开始与完成事件，紧凑摘要和展开详情使用同一份结果。
@@ -350,7 +361,7 @@ Crossterm 官方禁止把 EventStream 与 read/poll 混用。推荐 UI 使用 Ev
 
 ### 现有代码的接入范围
 
-[Agent::handle_user_message](../../src/agent/mod.rs) 保留唯一模型／工具执行循环，移出终端输入和打印职责。UI 在现有 Tokio runtime 上驱动单个 Agent worker，以任务 channel 交付输入，以事件 channel 接收展示数据。Agent 不依赖 Ratatui；Conversation 继续负责 usage、compact、overflow recovery 与当前 history journal。
+[Agent::handle_user_message](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/src/agent/mod.rs) 保留唯一模型／工具执行循环，移出终端输入和打印职责。UI 在现有 Tokio runtime 上驱动单个 Agent worker，以任务 channel 交付输入，以事件 channel 接收展示数据。Agent 不依赖 Ratatui；Conversation 继续负责 usage、compact、overflow recovery 与当前 history journal。
 
 需要覆盖的事件是响应正文、工具开始／完成、压缩结果、usage 和轮次完成；任务错误在 worker 返回边界统一送到 UI，避免每一层重复生成错误展示。轮次开始可由 UI 接受输入时建立。首版非流式请求期间显示等待；后续流式实现通过同一事件边界接入。
 

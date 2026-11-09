@@ -1,13 +1,11 @@
 use super::*;
-use crate::agent::conversation::CompactionConfig;
-use crate::agent::journal::{JournalRecord, Replay, TaskStatus};
+use crate::client::history::{History, HistoryEntry, TaskStatus};
+use crate::client::types::{InputItem, InputMessageContent, MessageRole};
 use crate::frontend::tui::commands::Commands;
 use crate::frontend::tui::sessions::Sessions;
 use crate::frontend::tui::state::ContextInfo;
 use crate::frontend::tui::theme::{self, Theme};
-use crate::protocol::{InputItem, InputMessageContent, MessageRole, ReasoningText};
 use crate::session::SessionEvent;
-use crate::session::store::SessionStore;
 use unicode_width::UnicodeWidthStr;
 
 fn screen(app: &mut App, editor: &Editor, width: u16, height: u16) -> String {
@@ -18,18 +16,8 @@ fn screen(app: &mut App, editor: &Editor, width: u16, height: u16) -> String {
     buffer_text(terminal.backend().buffer())
 }
 
-fn replay(history: Vec<JournalRecord>, status: TaskStatus) -> Replay {
-    Replay {
-        context: Vec::new(),
-        history_timestamps: vec![0; history.len()],
-        history,
-        has_summary: false,
-        status,
-        updated_at: 0,
-        valid_bytes: 0,
-        needs_newline: false,
-        active_task: None,
-    }
+fn replay(history: Vec<HistoryEntry>, status: TaskStatus) -> History {
+    History { history, status }
 }
 
 fn user(text: &str) -> InputItem {
@@ -48,7 +36,7 @@ fn assistant_item(text: &str) -> InputItem {
 
 fn reasoning_item(text: &str) -> InputItem {
     InputItem::Reasoning {
-        content: vec![crate::protocol::ReasoningText::new(text)],
+        content: vec![crate::client::types::ReasoningText::new(text)],
         provider_data: None,
     }
 }
@@ -546,19 +534,19 @@ fn tool_failure_count_refreshes_in_the_activity_summary() {
 fn restore_collapses_completed_tasks_and_leaves_legacy_history_untouched() {
     let completed = replay(
         vec![
-            JournalRecord::TaskStarted {
+            HistoryEntry::TaskStarted {
                 task_id: "t1".into(),
                 message_id: None,
                 configuration: None,
             },
-            JournalRecord::Messages {
+            HistoryEntry::Messages {
                 items: vec![
                     user("old question"),
                     reasoning_item("old thought"),
                     assistant_item("old answer"),
                 ],
             },
-            JournalRecord::TaskFinished {
+            HistoryEntry::TaskFinished {
                 task_id: "t1".into(),
                 status: TaskStatus::Completed,
                 error: None,
@@ -580,7 +568,7 @@ fn restore_collapses_completed_tasks_and_leaves_legacy_history_untouched() {
     assert_eq!(app.visible_record_keys(), vec![0, 1, 3]);
 
     let unknown = replay(
-        vec![JournalRecord::Messages {
+        vec![HistoryEntry::Messages {
             items: vec![user("legacy"), assistant_item("legacy answer")],
         }],
         TaskStatus::Unknown,
@@ -599,12 +587,12 @@ fn restore_collapses_completed_tasks_and_leaves_legacy_history_untouched() {
 fn restore_interrupted_group_does_not_absorb_the_next_task() {
     let interrupted = replay(
         vec![
-            JournalRecord::TaskStarted {
+            HistoryEntry::TaskStarted {
                 task_id: "t1".into(),
                 message_id: None,
                 configuration: None,
             },
-            JournalRecord::Messages {
+            HistoryEntry::Messages {
                 items: vec![
                     user("interrupted question"),
                     reasoning_item("partial thinking"),
@@ -1174,100 +1162,4 @@ fn visual_fixture_dumps_a_full_task_for_independent_review() {
     }
     let path = std::path::PathBuf::from("/tmp/saki-tui-style-render-dump.txt");
     std::fs::write(&path, dump).unwrap();
-}
-
-/// Builds an isolated SessionStore with a completed demo task so the real
-/// binary can be started against it with explicit dummy API configuration and
-/// no live model call. The directory and manifest are left in place. Manual
-/// fixture: run with `--ignored` when preparing process acceptance.
-#[test]
-#[ignore = "manual demo session fixture: run with --ignored --nocapture"]
-fn visual_fixture_creates_restorable_demo_session() {
-    let root = std::path::PathBuf::from("/tmp/saki-tui-style-demo");
-    let _ = std::fs::remove_dir_all(&root);
-    let workspace = root.join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let sessions = root.join("sessions");
-    let store = SessionStore::new(&sessions).unwrap();
-    let id = store
-        .create(
-            &workspace,
-            "demo-model",
-            "You are a deterministic demo session.",
-            CompactionConfig::new(1_000_000),
-        )
-        .unwrap();
-    let mut loaded = store.open(&id).unwrap();
-    loaded.conversation.begin_task().unwrap();
-    loaded
-        .conversation
-        .add_user_message("Fix the failing parser test");
-    loaded.conversation.add_reasoning(
-        vec![ReasoningText::new(
-            "Read the failing test and trace the table path.",
-        )],
-        None,
-    );
-    loaded.conversation.add_tool_call(
-        "c1".into(),
-        "read".into(),
-        json!({"path": "src/frontend/tui/markdown.rs"}).to_string(),
-    );
-    loaded.conversation.add_tool_result(
-        "c1".into(),
-        json!({"output": "table path", "exit_code": 0}).to_string(),
-    );
-    loaded.conversation.add_tool_call(
-        "c2".into(),
-        "bash".into(),
-        json!({"command": "cargo test tui::markdown"}).to_string(),
-    );
-    loaded.conversation.add_tool_result(
-        "c2".into(),
-        json!({"output": "test result: ok", "exit_code": 0}).to_string(),
-    );
-    loaded.conversation.add_assistant_message(
-        "Fixed the table parser.\n\n| Check | Result |\n| --- | --- |\n| formatting | pass |\n| tests | pass |\n\nRun `cargo test` again after the next change."
-            .into(),
-    );
-    loaded.conversation.finish_task(None).unwrap();
-    drop(loaded);
-
-    let replay = store.open(&id).unwrap().replay;
-    let restored = App::restore(&replay);
-    assert!(matches!(
-        &restored.records[1],
-        Record::Activity {
-            end: Some(_),
-            expanded: false,
-            ..
-        }
-    ));
-
-    let manifest = format!(
-        concat!(
-            "root={}\n",
-            "sessions={}\n",
-            "session_id={}\n",
-            "model=demo-model\n",
-            "workspace={}\n",
-            "\n",
-            "Offline launch (no live model call):\n",
-            "\n",
-            "API_KEY=dummy-api-key \\\n",
-            "SAKI_BASE_URL=http://127.0.0.1:9/v1 \\\n",
-            "SAKI_CONTEXT_TOKENS=1000000 \\\n",
-            "SAKI_MODEL=demo-model \\\n",
-            "SAKI_SESSION_DIR={} \\\n",
-            "SAKI_SESSION={} \\\n",
-            "SAKI_UI=tui cargo run\n",
-        ),
-        root.display(),
-        sessions.display(),
-        id,
-        workspace.display(),
-        sessions.display(),
-        id,
-    );
-    std::fs::write(root.join("manifest.txt"), manifest).unwrap();
 }

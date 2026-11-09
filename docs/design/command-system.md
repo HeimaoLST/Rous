@@ -1,6 +1,6 @@
 # Local command system
 
-Updated: 2026-10-23. Status: implemented for TUI and console. Persistent session operations are reused; no new model/tool loop is introduced.
+Updated: 2026-11-09. Status: implemented for TUI and console. Persistent session operations are reused; no new model/tool loop is introduced.
 
 ## Boundary
 
@@ -19,7 +19,7 @@ Composer / console input
 
 Parsing must happen before the frontend removes the draft, appends a visible user message, or marks the Agent as running. A submitted message is not removed or displayed as running until the Runtime `Accepted` reply carries its full association. Successful local commands do not enter Conversation/history.jsonl as user messages. Session operations can still create their normal metadata/history changes.
 
-The parser accepts text and returns a typed intent or an argument error. It does not import Ratatui, access the filesystem, call a model, execute shell commands, or hold an Agent. Session lifecycle and persistence remain in the Runtime/service ([runtime.rs](../../src/session/runtime.rs), [store.rs](../../src/session/store.rs)); the terminal manager only adapts request IDs and packets.
+The parser accepts text and returns a typed intent or an argument error. It does not import Ratatui, access the filesystem, call a model, execute shell commands, or hold an Agent. Session lifecycle and persistence remain in the [Saki service](https://github.com/HeimaoLST/Saki/blob/dev/docs/design/runtime-api.md); the terminal manager only adapts request IDs and packets.
 
 ## Initial vocabulary
 
@@ -81,9 +81,11 @@ Descriptions and usage are shown on demand. No permanent keyboard legend or comm
 - [TUI commands](../../src/frontend/tui/commands.rs): completion presentation and command dispatch; no eager draft consumption.
 - [TUI submission](../../src/frontend/tui/mod.rs): classification before `Accepted`, visible user records, or Agent execution; per-session projections route associated packets.
 - [Console](../../src/frontend/console.rs): bounded request/event consumption, current-task Ctrl-C cancel, associated HistoryRestored append-only repair, and piped EOF draining.
-- [Runtime service](../../src/session/runtime.rs): authoritative sessions, task IDs/message IDs, unique Finished terminal, cancellation and title jobs. `TitleUpdated` remains non-acknowledging; `Renamed` is the explicit rename response.
+- [Saki Runtime service](https://github.com/HeimaoLST/Saki/blob/dev/docs/design/runtime-api.md): authoritative sessions, task IDs/message IDs, unique Finished terminal, cancellation and title jobs. `TitleUpdated` remains non-acknowledging; `Renamed` is the explicit rename response.
 
 Help and completion read the same definitions. Product feedback remains English. The command layer adds no API calls, database, plugin system, permanent footer legend, or persistence format.
+
+Historical validation reports below belong to their named Saki commits. They are not evidence for the independent Rous build. The independent product uses the external-runtime fixture and commands in [README](../../README.md).
 
 Validation status: the `7f87e44` checkpoint passed 596 main + 70 support tests with 0 failed/11 ignored; its earlier parallel Runtime title failure is preserved as issue evidence. Runtime `8f7831a` then added the explicit MetadataLock unlock correction with controlled duplicated-descriptor RED/GREEN coverage, not a consumer-side title change. The joint fixed candidate `527b402e69fcdf76e5a4f84eb906a233788f0f31` has a Runtime author report of **606 main + 70 support tests, 0 failed, 12 ignored** and exact CI `39832826642` green. Raw failures and the withdrawn native-candidate attempt remain issue evidence; they are not erased or rewritten. This is joint-candidate validation, not completed `dev` integration.
 
@@ -91,8 +93,10 @@ New behavior tests live in [parser tests](../../tests/command/mod.rs), [TUI comm
 
 Actual joint-candidate PTY validation on the fixed `527b402` build: 28/28 checks across five scoped scenarios (new/explicit resume/rename/title, A-running/B-view, TUI cancel, console active-cancel→one interrupted→help→idle SIGINT, editor), plus a separate idle-SIGINT-with-open-stdin exit. The historical `7f87e44` checkpoint is distinguished from this current candidate validation. Raw failed artifacts remain in the issue handoff; they are not deleted.
 
-2026-10-23 Runtime consumer facts: terminal requests are bounded `SessionRequest{request_id, command}` with host IDs and `try_send`; replies are matched by request_id and task events by full `(session_id,task_id,message_id)`. Send is committed/displayed only on `Accepted`; rejection retains the exact editor draft and creates no User/Activity/running record. Console Ctrl-C cancels only the current observed task with its exact session/task and its acknowledgment is not terminal. Console `HistoryRestored` appends the authoritative canonical body for the associated task without replaying that task’s terminal; the one ensuing `Finished` reports status/error/persistence/history_required. No second protocol, parser, or unbounded queue is used.
+2026-10-23 Runtime consumer facts: terminal requests are bounded `SessionRequest{request_id, command}` with host IDs and `try_send`; replies are matched by request_id and task events by full `(session_id,task_id,message_id)`. Send is committed/displayed only on `Accepted`; rejection retains the exact editor draft and creates no User/Activity/running record. Console Ctrl-C cancels only the current observed task with its exact session/task and its acknowledgment is not terminal. Console `HistoryRestored` appends the authoritative canonical body for the associated task without replaying that task’s terminal; the one ensuing `Finished` reports status/error/persistence/history_required. Rous consumes the public stdio protocol. Its raw event queue has an 8 MiB byte budget; UI request and event channels remain bounded.
 
-Console shutdown semantics (#109): production keeps the single unchanged Tokio stdin source; the host `main`/`app` owns post-app drain and invokes `shutdown_background` only after the manager, actor, prepared operations and forwarders drain. An idle SIGINT with stdin still open therefore exits without requiring EOF/Enter. The console run loop and task association logic are unchanged. See [main.rs](../../src/main.rs), [app.rs](../../src/app.rs), [session terminal](../../src/session/terminal.rs), and [runtime API](runtime-api.md); no second stdin reader/thread or input framework is introduced. Ctrl+C acknowledgement is never treated as a terminal.
+Console shutdown semantics (#109): production keeps the single unchanged Tokio stdin source; the host `main`/`app` owns post-app drain and invokes `shutdown_background` only after the UI manager and its owned Runtime child and forwarders drain. An idle SIGINT with stdin still open therefore exits without requiring EOF/Enter. The console run loop and task association logic are unchanged. See [main.rs](../../src/main.rs), [app.rs](../../src/app.rs), [session terminal](../../src/session/terminal.rs), and [runtime API](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/design/runtime-api.md); no second stdin reader/thread or input framework is introduced. Ctrl+C acknowledgement is never treated as a terminal.
+
+Rous display failure semantics, 2026-11-09: enqueue timeout, oversize, or an undeliverable critical reply closes the local display even if its receiver still exists. `is_closed` and `closed` expose that state. Later sends reject; the receiver discards the incomplete queued projection. The manager stops admission and drains its existing Runtime work without cancelling accepted tasks. A controlled queue-full process fixture verifies the task completes and remains restorable through the public snapshot.
 
 Remaining scope: argument/session-ID completion, aliases, persistent command history, plugins, model switching, manual compact, and background/offscreen cancellation UI.

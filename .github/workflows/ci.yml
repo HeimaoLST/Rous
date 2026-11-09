@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev, master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  rust:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.0
+          rustc --version
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Rous formatting, static checks, tests and build
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
+          cargo build --locked --release --bin rous
+      - name: Real PTY terminal cleanup
+        run: |
+          set -o pipefail
+          cargo test --locked --bin rous frontend::tui::tests::pty::pty_panic_restores_terminal -- --ignored --exact --test-threads=1 | tee "$RUNNER_TEMP/rous-pty.log"
+          grep -q 'test result: ok. 1 passed; 0 failed' "$RUNNER_TEMP/rous-pty.log"
+      - name: Python CI support tests
+        run: |
+          python3 - <<'PYTHON'
+          import unittest
+          suite = unittest.TestLoader().discover("scripts", pattern="test_*.py")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          print(f"DISCOVERED {result.testsRun} tests")
+          raise SystemExit(0 if result.testsRun and result.wasSuccessful() else 1)
+          PYTHON
+  runtime-compatibility:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.0
+          rustc --version
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Fetch exact pinned Saki runtime artifact
+        env:
+          GH_TOKEN: ${{ secrets.SAKI_ARTIFACT_READ_TOKEN || github.token }}
+        run: |
+          python3 scripts/fetch-saki-runtime.py --pin .github/saki-runtime.json \
+            --output "$RUNNER_TEMP/saki-runtime" --github-env "$GITHUB_ENV"
+      - name: Runtime identity
+        run: |
+          "$SAKI_RUNTIME_BIN" --version
+          cat "$RUNNER_TEMP/saki-runtime/manifest.json"
+      - name: Real Rous stdio client contract against pinned Saki
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          cargo test --locked --bin rous client::tests::real_runtime_contract -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$RUNNER_TEMP/rous-runtime.log"
+      - name: Require the named real client fixture to execute and pass
+        if: always()
+        run: python3 scripts/check-rous-runtime-results.py "$RUNNER_TEMP/rous-runtime.log"
+  ci-required:
+    if: always()
+    needs: [rust, runtime-compatibility]
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    steps:
+      - name: Require Rous and pinned protocol compatibility
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          COMPAT_RESULT: ${{ needs.runtime-compatibility.result }}
+        run: |
+          echo "rust=$RUST_RESULT runtime-compatibility=$COMPAT_RESULT"
+          test "$RUST_RESULT" = success
+          test "$COMPAT_RESULT" = success

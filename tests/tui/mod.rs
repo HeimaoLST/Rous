@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::AgentEvent;
+use crate::client::AgentEvent;
 use crate::frontend::tui::editor::Editor;
 use crate::frontend::tui::log;
 use crate::frontend::tui::state::{Anchor, App, Focus, Record};
@@ -1502,7 +1502,7 @@ fn message_jumps_keep_draft_cursor_images_and_focus() {
     let mut editor = Editor::new();
     editor.insert_str("draft\nlines");
     editor.move_visual_up(40);
-    editor.insert_image(crate::agent::message::ImageAttachment::new(
+    editor.insert_image(crate::input::ImageAttachment::new(
         "a.png",
         "data:image/png;base64,AA",
     ));

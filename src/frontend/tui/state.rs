@@ -4,11 +4,11 @@ use ratatui::{layout::Rect, text::Line};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-use crate::agent::AgentEvent;
-use crate::agent::message::{ImageAttachment, UserMessage};
+use crate::client::AgentEvent;
 use crate::frontend::tui::history::InputHistory;
 use crate::frontend::tui::selection::{TextSelection, ViewportRow, VisualAnchor};
 use crate::frontend::tui::theme::Theme;
+use crate::input::{ImageAttachment, UserInput};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
@@ -115,7 +115,7 @@ pub enum Record {
 /// never holds the agent, conversation or tools.
 pub struct App {
     pub records: Vec<Record>,
-    pub session: Option<crate::session::store::SessionMetadata>,
+    pub session: Option<crate::client::SessionMetadata>,
     pub session_button_area: Rect,
     pub layouts: Vec<Option<CachedLayout>>,
     response_records: HashMap<String, usize>,
@@ -225,24 +225,24 @@ impl App {
         }
     }
 
-    pub fn restore(replay: &crate::agent::journal::Replay) -> Self {
+    pub fn restore(replay: &crate::client::history::History) -> Self {
         use crate::{
-            agent::journal::{JournalRecord, TaskStatus},
-            protocol::{InputContentPart, InputItem, InputMessageContent, MessageRole},
+            client::history::{HistoryEntry, TaskStatus},
+            client::types::{InputContentPart, InputItem, InputMessageContent, MessageRole},
         };
         let mut app = Self::new();
         let mut pending_task = false;
         let mut marker: Option<usize> = None;
         for record in &replay.history {
             match record {
-                JournalRecord::Messages { items } => {
+                HistoryEntry::Messages { items } => {
                     for item in items {
                         match item {
                             InputItem::Message {
                                 role: MessageRole::User,
                                 content,
                             } => {
-                                let mut message = UserMessage::default();
+                                let mut message = UserInput::default();
                                 match content {
                                     InputMessageContent::Text(text) => message.text = text.clone(),
                                     InputMessageContent::Parts(parts) => {
@@ -324,7 +324,7 @@ impl App {
                         }
                     }
                 }
-                JournalRecord::Compaction {
+                HistoryEntry::Compaction {
                     tokens_before,
                     tokens_after,
                     ..
@@ -332,11 +332,11 @@ impl App {
                     tokens_before: *tokens_before,
                     tokens_after: *tokens_after,
                 }),
-                JournalRecord::TaskStarted { .. } => {
+                HistoryEntry::TaskStarted { .. } => {
                     pending_task = true;
                     marker = None;
                 }
-                JournalRecord::TaskFinished { status, error, .. } => {
+                HistoryEntry::TaskFinished { status, error, .. } => {
                     if let Some(index) = marker.take() {
                         let end = app.task_boundary(index);
                         let completed = matches!(status, TaskStatus::Completed);
@@ -391,7 +391,7 @@ impl App {
             }
         }
         if matches!(replay.status, TaskStatus::Interrupted | TaskStatus::Unknown)
-            && replay.context.len() > 1
+            && replay.has_task_history()
         {
             app.push(Record::Error { message: format!("Previous task: {:?}. No tools were re-executed. Check current state before continuing.", replay.status) });
         }
@@ -440,7 +440,7 @@ impl App {
     /// a reader who scrolled up keeps their position until they press End.
     /// The Activity marker is created here, at task start, so raw record order
     /// is retained and every later record keeps its identity.
-    pub fn submit(&mut self, message: impl Into<UserMessage>) {
+    pub fn submit(&mut self, message: impl Into<UserInput>) {
         let message = message.into();
         self.response_records.clear();
         self.task_record_start = Some(self.records.len());

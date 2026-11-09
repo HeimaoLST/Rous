@@ -190,7 +190,7 @@ fn search_keeps_draft_cursor_images_and_undo() {
     let mut editor = Editor::new();
     editor.insert_str("keep");
     editor.insert_str("\nmore");
-    editor.insert_image(crate::agent::message::ImageAttachment::new(
+    editor.insert_image(crate::input::ImageAttachment::new(
         "a.png",
         "data:image/png;base64,AA",
     ));

@@ -1,36 +1,22 @@
-#[cfg(test)]
-use super::store::{LoadedSession, SessionStore};
-use super::{
-    SessionEventReceiver, SessionEventSender, channel,
-    config::{ConfigPatch, ConfigView},
-    runtime::{
-        self, Association, Runtime, RuntimeCommand, RuntimeError, RuntimeHandle, RuntimeReply,
-        SessionState, TaskEvent, TaskFinished,
-    },
-    store::{SessionMetadata, SessionSummary},
-};
-#[cfg(test)]
-use crate::{agent::conversation::CompactionConfig, client::ModelClient};
+use super::SessionEventSender;
 use crate::{
-    agent::{
-        AgentEvent,
-        conversation::Conversation,
-        journal::{self, Replay},
-        message::UserMessage,
+    client::{
+        AgentEvent, Association, Client, RuntimeError, RuntimeProcess, SessionMetadata,
+        SessionState, SessionSummary, TaskFinished, history::History, types::Snapshot,
     },
-    tools::{ToolContext, register_builtins, tool_registry::ToolRegistry},
+    input::UserInput,
 };
-use anyhow::{Context, Result, bail};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
-use tokio::{
-    sync::{Mutex, broadcast, mpsc::Receiver},
-    task::JoinSet,
-};
+use anyhow::{Context, Result};
+use serde::Serialize;
+use serde_json::{Value, json};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinSet;
 
 pub enum SessionCommand {
     Send {
         session_id: String,
-        message: UserMessage,
+        message: UserInput,
     },
     List,
     Create,
@@ -46,23 +32,22 @@ pub enum SessionCommand {
         task_id: String,
     },
 }
-
 pub struct SessionRequest {
     pub request_id: u64,
     pub command: SessionCommand,
 }
-
+#[derive(Serialize)]
 pub enum SessionEvent {
     Opened {
         metadata: SessionMetadata,
-        replay: Replay,
+        replay: History,
         context: AgentEvent,
         state: SessionState,
         stream: Option<Association>,
     },
     HistoryRestored {
         metadata: SessionMetadata,
-        replay: Replay,
+        replay: History,
         context: AgentEvent,
         state: SessionState,
     },
@@ -76,135 +61,18 @@ pub enum SessionEvent {
     Accepted,
     Finished(TaskFinished),
     Cancelled {
-        status: &'static str,
+        status: String,
     },
     Error {
         operation: &'static str,
         error: RuntimeError,
     },
 }
-
-/// Terminal command/event adapter. Runtime alone owns sessions and execution.
 pub struct SessionManager {
-    runtime: Runtime,
+    process: RuntimeProcess,
     initial_session: Option<String>,
 }
-
-impl SessionManager {
-    #[cfg(test)]
-    pub fn new(
-        store: SessionStore,
-        client: ModelClient,
-        loaded: LoadedSession,
-        cwd: PathBuf,
-        default_model: String,
-        config: CompactionConfig,
-    ) -> Result<Self> {
-        let initial_session = Some(loaded.metadata.id.clone());
-        drop(loaded);
-        Ok(Self::from_runtime(
-            Runtime::new(store, client, cwd, default_model, config),
-            initial_session,
-        ))
-    }
-
-    pub fn from_runtime(runtime: Runtime, initial_session: Option<String>) -> Self {
-        Self {
-            runtime: runtime.with_automatic_titles(true),
-            initial_session,
-        }
-    }
-
-    pub fn event_channel(&self) -> (SessionEventSender, SessionEventReceiver) {
-        channel::channel(self.runtime.output_state())
-    }
-
-    pub async fn run(
-        self,
-        mut input: Receiver<SessionRequest>,
-        output: SessionEventSender,
-    ) -> Result<()> {
-        let (handle, mut actor) = self.runtime.start();
-        let mut metadata = handle.subscribe_metadata();
-        let mut operations: CommandJobs = JoinSet::new();
-        let mut forwarders = JoinSet::new();
-        let delivery = Arc::new(Mutex::new(HashMap::new()));
-        let mut input_closed = false;
-        let mut stopping = false;
-        let initial = match self.initial_session {
-            Some(session_id) => SessionCommand::Open { session_id },
-            None => SessionCommand::Create,
-        };
-        match execute_command(&handle, initial, &*delivery.lock().await).await {
-            Ok(CommandReply::Event(event)) => {
-                let _ = output.send(*event).await;
-            }
-            Ok(CommandReply::Task(_)) => unreachable!("startup only creates or loads a session"),
-            Err(error) => {
-                let _ = output.send(error_event("startup", None, &error)).await;
-                let _ = handle.call(RuntimeCommand::Shutdown).await;
-                actor.await??;
-                return Err(error);
-            }
-        }
-
-        loop {
-            if input_closed && operations.is_empty() && !stopping {
-                let _ = handle.call(RuntimeCommand::Shutdown).await;
-                stopping = true;
-            }
-            tokio::select! {
-                biased;
-                result=&mut actor=>{
-                    while let Some(result)=operations.join_next().await {result??;}
-                    while let Some(result)=forwarders.join_next().await {result??;}
-                    result??;return Ok(());
-                }
-                Some(result)=operations.join_next(),if !operations.is_empty()=>{
-                    if let Some(task)=result?? {
-                        let handle=handle.clone();let output=output.clone();let delivery=delivery.clone();
-                        forwarders.spawn(async move {forward_task(handle,output,*task,delivery).await});
-                    }
-                }
-                Some(result)=forwarders.join_next(),if !forwarders.is_empty()=>{result??;}
-                update=metadata.recv(),if operations.len()<8 && !stopping=>{
-                    match update {
-                        Ok(update)=>spawn_metadata(&mut operations,handle.clone(),output.clone(),delivery.clone(),Some(update.session_id)),
-                        Err(broadcast::error::RecvError::Lagged(_))=>spawn_metadata(&mut operations,handle.clone(),output.clone(),delivery.clone(),None),
-                        Err(broadcast::error::RecvError::Closed)=>{}
-                    }
-                }
-                request=input.recv(),if !input_closed=>{
-                    match request {
-                        Some(SessionRequest{request_id,command:SessionCommand::Cancel{session_id,task_id}})=>{
-                            let event=match handle.call(RuntimeCommand::Cancel{session_id:session_id.clone(),task_id}).await {
-                                Ok(RuntimeReply::Cancelled{status})=>SessionEvent::Cancelled{status},
-                                Ok(_)=>error_event("cancel",Some(&session_id),&anyhow::anyhow!("unexpected cancel reply")),
-                                Err(error)=>SessionEvent::Error{operation:"cancel",error},
-                            };
-                            if output.try_send_reply(request_id,event).is_err(){output.state().close();}
-                        }
-                        Some(request) if operations.len()<8=>spawn_command(&mut operations,handle.clone(),output.clone(),delivery.clone(),request),
-                        Some(request)=>{
-                            let mut error=RuntimeError::new("busy","too many terminal operations are being prepared");
-                            error.session_id=request.command.session_id().map(str::to_owned);
-                            let event=SessionEvent::Error{operation:request.command.operation(),error};
-                            if output.try_send_reply(request.request_id,event).is_err(){output.state().close();}
-                        }
-                        None=>input_closed=true,
-                    }
-                }
-                _=output.closed(),if !input_closed=>{input_closed=true;}
-            }
-        }
-    }
-}
-
-// This map tracks undelivered display streams, not business task state. The
-// gate orders snapshots with Accepted/Finished without blocking cancellation.
 type Delivery = Arc<Mutex<HashMap<String, Association>>>;
-type CommandJobs = JoinSet<Result<Option<Box<runtime::AcceptedTask>>>>;
-
 impl SessionCommand {
     fn operation(&self) -> &'static str {
         match self {
@@ -216,378 +84,356 @@ impl SessionCommand {
             Self::Cancel { .. } => "cancel",
         }
     }
-
-    fn session_id(&self) -> Option<&str> {
-        match self {
-            Self::Send { session_id, .. }
-            | Self::Open { session_id }
-            | Self::Rename { session_id, .. }
-            | Self::Cancel { session_id, .. } => Some(session_id),
-            Self::List | Self::Create => None,
+}
+impl SessionManager {
+    pub fn new(process: RuntimeProcess, initial_session: Option<String>) -> Self {
+        Self {
+            process,
+            initial_session,
         }
     }
-}
-
-fn error_event(
-    operation: &'static str,
-    session_id: Option<&str>,
-    error: &anyhow::Error,
-) -> SessionEvent {
-    let mut error = error
-        .downcast_ref::<RuntimeError>()
-        .cloned()
-        .unwrap_or_else(|| RuntimeError::new("io_error", format!("{error:#}")));
-    if error.session_id.is_none() {
-        error.session_id = session_id.map(str::to_owned);
-    }
-    SessionEvent::Error { operation, error }
-}
-
-fn spawn_metadata(
-    jobs: &mut CommandJobs,
-    handle: RuntimeHandle,
-    output: SessionEventSender,
-    delivery: Delivery,
-    id: Option<String>,
-) {
-    jobs.spawn(async move {
-        let _gate = delivery.lock().await;
-        match handle.call(RuntimeCommand::List).await {
-            Ok(RuntimeReply::List { sessions }) => {
-                for session in sessions {
-                    if id.as_ref().is_none_or(|id| *id == session.metadata.id) {
-                        let _ = output
-                            .send(SessionEvent::TitleUpdated(session.metadata))
-                            .await;
+    pub async fn run(
+        mut self,
+        mut input: mpsc::Receiver<SessionRequest>,
+        output: SessionEventSender,
+    ) -> Result<()> {
+        let client = self.process.client.clone();
+        let delivery: Delivery = Default::default();
+        let startup = match self.initial_session.take() {
+            Some(session_id) => SessionCommand::Open { session_id },
+            None => SessionCommand::Create,
+        };
+        if let Err(error) = execute(&client, startup, None, &output, &delivery).await {
+            let _ = output.send(error_event("startup", error.clone())).await;
+            let _ = client.call::<Value>("runtime.shutdown", json!({})).await;
+            self.process.finish().await?;
+            return Err(error.into());
+        }
+        client
+            .call::<Value>("runtime.metadata.subscribe", json!({}))
+            .await?;
+        let (unused, empty) = mpsc::unbounded_channel();
+        drop(unused);
+        let events = std::mem::replace(&mut self.process.events, empty);
+        let mut forwarder = tokio::spawn(forward_events(
+            client.clone(),
+            events,
+            output.clone(),
+            delivery.clone(),
+        ));
+        let mut jobs = JoinSet::new();
+        let mut closed = false;
+        let mut forwarded = false;
+        let mut forwarding_error = None;
+        loop {
+            if closed && jobs.is_empty() {
+                break;
+            }
+            tokio::select! {
+                biased;
+                _=output.closed(),if !closed=>{closed=true;input.close();}
+                result=jobs.join_next(),if !jobs.is_empty()=>{result.expect("nonempty jobs")?;}
+                result=&mut forwarder,if !forwarded=>{forwarded=true;forwarding_error=result?.err();closed=true;input.close();}
+                request=input.recv(),if !closed=>{
+                    match request {
+                        Some(request) if jobs.len()<8=>{
+                            let client=client.clone();let output=output.clone();let delivery=delivery.clone();
+                            jobs.spawn(async move{
+                                let operation=request.command.operation();
+                                if let Err(error)=execute(&client,request.command,Some(request.request_id),&output,&delivery).await {
+                                    let _=output.send_reply(request.request_id,None,error_event(operation,error)).await;
+                                }
+                            });
+                        }
+                        Some(request)=>{let _=output.try_send_reply(request.request_id,error_event(request.command.operation(),RuntimeError::new("busy","too many terminal operations")));},
+                        None=>closed=true,
                     }
                 }
             }
-            Ok(_) => {}
-            Err(error) => {
-                let _ = output
-                    .send(SessionEvent::Error {
-                        operation: "metadata",
-                        error,
-                    })
-                    .await;
-            }
         }
-        Ok(None)
-    });
-}
-
-fn spawn_command(
-    jobs: &mut CommandJobs,
-    handle: RuntimeHandle,
-    output: SessionEventSender,
-    delivery: Delivery,
-    request: SessionRequest,
-) {
-    jobs.spawn(async move {
-        let operation = request.command.operation();
-        let session_id = request.command.session_id().map(str::to_owned);
-        let mut streams = delivery.lock().await;
-        match execute_command(&handle, request.command, &streams).await {
-            Ok(CommandReply::Task(task)) => {
-                streams.insert(
-                    task.association.session_id.clone(),
-                    task.association.clone(),
-                );
-                let _ = output
-                    .send_reply(
-                        request.request_id,
-                        Some(task.association.clone()),
-                        SessionEvent::Accepted,
-                    )
-                    .await;
-                Ok(Some(task))
-            }
-            Ok(CommandReply::Event(event)) => {
-                let _ = output.send_reply(request.request_id, None, *event).await;
-                Ok(None)
-            }
-            Err(error) => {
-                let _ = output
-                    .send_reply(
-                        request.request_id,
-                        None,
-                        error_event(operation, session_id.as_deref(), &error),
-                    )
-                    .await;
-                Ok(None)
-            }
+        let _ = client.call::<Value>("runtime.shutdown", json!({})).await;
+        self.process.finish().await?;
+        if !forwarded {
+            forwarder.await??;
         }
-    });
+        if let Some(error) = forwarding_error {
+            return Err(error);
+        }
+        Ok(())
+    }
 }
-
-enum CommandReply {
-    Event(Box<SessionEvent>),
-    Task(Box<runtime::AcceptedTask>),
+fn error_event(operation: &'static str, error: RuntimeError) -> SessionEvent {
+    SessionEvent::Error { operation, error }
 }
-
-async fn execute_command(
-    handle: &RuntimeHandle,
+async fn snapshot(
+    client: &Client,
+    id: &str,
+    stream: Option<Association>,
+    restore: bool,
+) -> Result<SessionEvent, RuntimeError> {
+    let params = match &stream {
+        Some(a) => json!({"session_id":id,"before_task_id":a.task_id}),
+        None => json!({"session_id":id}),
+    };
+    let snapshot: Snapshot = client.call("session.snapshot", params).await?;
+    if snapshot.session_id != id {
+        return Err(RuntimeError::new(
+            "invalid_response",
+            "snapshot returned another session",
+        ));
+    }
+    let status = if stream.is_some() {
+        snapshot
+            .records
+            .iter()
+            .rev()
+            .find_map(|record| match &record.record {
+                crate::client::history::HistoryEntry::TaskFinished { status, .. } => {
+                    Some(status.clone())
+                }
+                crate::client::history::HistoryEntry::TaskStarted { .. } => {
+                    Some(Default::default())
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    } else {
+        serde_json::from_value(json!(snapshot.session.status)).unwrap_or_default()
+    };
+    let replay = History {
+        history: snapshot
+            .records
+            .into_iter()
+            .map(|record| record.record)
+            .collect(),
+        status,
+    };
+    let context = AgentEvent::ContextUpdated {
+        model: snapshot.context.model,
+        context_tokens: snapshot.context.context_tokens,
+        context_window: snapshot.context.context_window,
+        input_limit: snapshot.context.input_limit,
+    };
+    Ok(if restore {
+        SessionEvent::HistoryRestored {
+            metadata: snapshot.metadata,
+            replay,
+            context,
+            state: snapshot.session,
+        }
+    } else {
+        SessionEvent::Opened {
+            metadata: snapshot.metadata,
+            replay,
+            context,
+            state: snapshot.session,
+            stream,
+        }
+    })
+}
+async fn execute(
+    client: &Client,
     command: SessionCommand,
-    streams: &HashMap<String, Association>,
-) -> Result<CommandReply> {
-    let reply = match command {
+    request_id: Option<u64>,
+    output: &SessionEventSender,
+    delivery: &Delivery,
+) -> Result<(), RuntimeError> {
+    if output.is_closed() {
+        return Err(RuntimeError::new(
+            "display_closed",
+            "terminal display is closed",
+        ));
+    }
+    if let SessionCommand::Cancel {
+        session_id,
+        task_id,
+    } = command
+    {
+        let value: Value = client
+            .call(
+                "task.cancel",
+                json!({"session_id":session_id,"task_id":task_id}),
+            )
+            .await?;
+        let status = value["status"]
+            .as_str()
+            .ok_or_else(|| RuntimeError::new("invalid_response", "cancel has no status"))?
+            .into();
+        if let Some(id) = request_id {
+            let _ = output
+                .send_reply(id, None, SessionEvent::Cancelled { status })
+                .await;
+        }
+        return Ok(());
+    }
+    let mut streams = delivery.lock().await;
+    if output.is_closed() {
+        return Err(RuntimeError::new(
+            "display_closed",
+            "terminal display is closed",
+        ));
+    }
+    let event = match command {
         SessionCommand::Send {
             session_id,
             message,
-        } => match handle
-            .call(RuntimeCommand::Send {
-                session_id,
-                message,
-            })
-            .await?
-        {
-            RuntimeReply::Accepted(task) => return Ok(CommandReply::Task(Box::new(task))),
-            _ => bail!("unexpected task reply"),
-        },
+        } => {
+            let value:Value=client.call("task.send",json!({"session_id":session_id,"message":{"text":message.text,"images":message.images},"context":message.context})).await?;
+            let task_id = value["task_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| RuntimeError::new("invalid_response", "accepted task has no ID"))?
+                .into();
+            let message_id = value["message_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| RuntimeError::new("invalid_response", "accepted input has no ID"))?
+                .into();
+            let association = Association {
+                session_id: session_id.clone(),
+                task_id,
+                message_id,
+            };
+            streams.insert(session_id, association.clone());
+            if let Some(id) = request_id {
+                let _ = output
+                    .send_reply(id, Some(association), SessionEvent::Accepted)
+                    .await;
+            }
+            return Ok(());
+        }
         SessionCommand::Create => {
-            let connections = match handle.call(RuntimeCommand::Connections).await? {
-                RuntimeReply::Connections(connections) => connections.len(),
-                _ => bail!("unexpected connections reply"),
-            };
-            let command = if connections > 1 {
-                RuntimeCommand::CreateConfigured {
-                    storage_schema: 2,
-                    config: ConfigPatch::default(),
-                }
+            let connections: Value = client.call("connection.list", json!({})).await?;
+            let params = if connections["connections"]
+                .as_array()
+                .is_some_and(|x| x.len() > 1)
+            {
+                json!({"storage_schema":2,"config":{}})
             } else {
-                RuntimeCommand::Create {
-                    working_directory: None,
-                    system_prompt: None,
-                }
+                json!({})
             };
-            let state = match handle.call(command).await? {
-                RuntimeReply::Session(state) => state,
-                _ => bail!("unexpected create reply"),
-            };
-            snapshot(
-                handle,
-                &state.session_id,
-                streams.get(&state.session_id).cloned(),
-                false,
-            )
-            .await?
+            let state: SessionState = client.call("session.create", params).await?;
+            snapshot(client, &state.session_id, None, false).await?
         }
         SessionCommand::Open { session_id } => {
-            handle
-                .call(RuntimeCommand::Load {
-                    session_id: session_id.clone(),
-                })
+            let _: SessionState = client
+                .call("session.load", json!({"session_id":session_id}))
                 .await?;
             snapshot(
-                handle,
+                client,
                 &session_id,
                 streams.get(&session_id).cloned(),
                 false,
             )
             .await?
         }
-        SessionCommand::List => match handle.call(RuntimeCommand::List).await? {
-            RuntimeReply::List { sessions } => SessionEvent::Listed(
-                sessions
-                    .into_iter()
-                    .map(|view| SessionSummary {
-                        metadata: view.metadata,
-                        updated_at: view.updated_at,
-                        status: display_status(&view.status),
-                        in_use: view.in_use,
-                        unavailable: view.unavailable,
-                    })
-                    .collect(),
-            ),
-            _ => bail!("unexpected list reply"),
-        },
-        SessionCommand::Rename { session_id, title } => match handle
-            .call(RuntimeCommand::Rename { session_id, title })
-            .await?
-        {
-            RuntimeReply::Renamed { metadata, .. } => SessionEvent::Renamed(metadata),
-            _ => bail!("unexpected rename reply"),
-        },
-        SessionCommand::Cancel { .. } => {
-            unreachable!("cancellation uses the independent control path")
+        SessionCommand::List => {
+            #[derive(serde::Deserialize)]
+            struct List {
+                sessions: Vec<SessionSummary>,
+            }
+            SessionEvent::Listed(
+                client
+                    .call::<List>("session.list", json!({}))
+                    .await?
+                    .sessions,
+            )
         }
+        SessionCommand::Rename { session_id, title } => {
+            #[derive(serde::Deserialize)]
+            struct Renamed {
+                metadata: SessionMetadata,
+            }
+            SessionEvent::Renamed(
+                client
+                    .call::<Renamed>(
+                        "session.rename",
+                        json!({"session_id":session_id,"title":title}),
+                    )
+                    .await?
+                    .metadata,
+            )
+        }
+        SessionCommand::Cancel { .. } => unreachable!(),
     };
-    Ok(CommandReply::Event(Box::new(reply)))
-}
-
-fn display_status(status: &str) -> journal::TaskStatus {
-    match status {
-        "completed" => journal::TaskStatus::Completed,
-        "failed" => journal::TaskStatus::Failed,
-        "interrupted" => journal::TaskStatus::Interrupted,
-        _ => journal::TaskStatus::Unknown,
-    }
-}
-
-async fn metadata_for_display(handle: &RuntimeHandle, id: &str) -> Result<SessionMetadata> {
-    match handle.call(RuntimeCommand::List).await? {
-        RuntimeReply::List { sessions } => sessions
-            .into_iter()
-            .find(|view| view.metadata.id == id)
-            .map(|view| view.metadata)
-            .context("session metadata is unavailable"),
-        _ => bail!("unexpected metadata reply"),
-    }
-}
-
-async fn snapshot(
-    handle: &RuntimeHandle,
-    id: &str,
-    stream: Option<Association>,
-    restore: bool,
-) -> Result<SessionEvent> {
-    let metadata = metadata_for_display(handle, id).await?;
-    let config = match handle
-        .call(RuntimeCommand::ConfigGet {
-            session_id: id.into(),
-        })
-        .await?
-    {
-        RuntimeReply::Config(config) => config,
-        _ => bail!("unexpected configuration reply"),
+    let result = match request_id {
+        Some(id) => output.send_reply(id, None, event).await,
+        None => output.send(event).await,
     };
-    let mut records = Vec::new();
-    let mut offset = 0;
-    let mut size = crate::protocol::ByteCounter::new(8 * 1024 * 1024);
-    loop {
-        let page = match handle
-            .call(RuntimeCommand::History {
-                session_id: id.into(),
-                offset,
-                limit: 1000,
-            })
-            .await?
-        {
-            RuntimeReply::History(page) => page,
-            _ => bail!("unexpected history reply"),
-        };
-        serde_json::to_writer(&mut size, &page.records)
-            .context("terminal history exceeds its 8 MiB projection limit")?;
-        records.extend(
-            page.records
-                .into_iter()
-                .map(|record| (record.timestamp_ms, record.record)),
-        );
-        match page.next_offset {
-            Some(next) => offset = next,
-            None => break,
-        }
-    }
-    if let Some(stream) = &stream
-        && let Some(boundary) = records.iter().position(|(_, record)| {
-            matches!(record, journal::JournalRecord::TaskStarted { task_id, .. } if task_id == &stream.task_id)
-        })
-    {
-        records.truncate(boundary);
-    }
-    let replay = journal::replay_records(records)?;
-    let context = context_for_display(&replay, &config)?;
-    let state = match handle
-        .call(RuntimeCommand::Status {
-            session_id: id.into(),
-        })
-        .await?
-    {
-        RuntimeReply::Session(state) => state,
-        _ => bail!("unexpected status reply"),
-    };
-    Ok(if restore {
-        SessionEvent::HistoryRestored {
-            metadata,
-            replay,
-            context,
-            state,
-        }
-    } else {
-        SessionEvent::Opened {
-            metadata,
-            replay,
-            context,
-            state,
-            stream,
-        }
-    })
+    result.map_err(|e| RuntimeError::new("display_closed", e.to_string()))
 }
-
-fn context_for_display(replay: &Replay, config: &ConfigView) -> Result<AgentEvent> {
-    let config = &config.effective_config;
-    let mut conversation =
-        Conversation::from_replay(replay).with_compaction_config(config.compaction)?;
-    conversation.set_system_prompt(config.system_prompt.clone());
-    let mut registry = ToolRegistry::new();
-    register_builtins(
-        &mut registry,
-        ToolContext {
-            cwd: config.working_directory.clone(),
-            output_dir: PathBuf::new(),
-        },
-    );
-    registry.retain_names(&config.tool_selection.builtin);
-    let mut tools = registry.list_definition();
-    tools.extend(config.tool_schemas.iter().map(|(name, schema)| {
-        crate::protocol::ToolDefinition {
-            name: name.clone(),
-            tool_type: crate::protocol::ToolType::Function,
-            description: schema.description.clone(),
-            parameters: schema.input_schema.clone(),
-        }
-    }));
-    Ok(AgentEvent::ContextUpdated {
-        model: config.model.clone(),
-        context_tokens: conversation
-            .estimated_context_tokens(&config.model, &tools)
-            .ok(),
-        context_window: conversation.context_window(),
-        input_limit: conversation.input_limit(),
-    })
-}
-
-async fn forward_task(
-    handle: RuntimeHandle,
+async fn forward_events(
+    client: Client,
+    mut events: mpsc::UnboundedReceiver<crate::client::Event>,
     output: SessionEventSender,
-    mut task: runtime::AcceptedTask,
     delivery: Delivery,
 ) -> Result<()> {
-    task.events.defer_terminal_ack();
-    while let Some(event) = task.events.next().await {
+    while let Some(frame) = events.recv().await {
         let mut streams = delivery.lock().await;
-        match event {
-            TaskEvent::Event(packet) => {
-                let _ = output.send_task(task.association.clone(), packet).await;
+        if frame.event["type"] == "session_metadata_updated" {
+            #[derive(serde::Deserialize)]
+            struct List {
+                sessions: Vec<SessionSummary>,
             }
-            TaskEvent::Finished(finished) => {
-                if finished.history_required && !output.state().is_closed() {
-                    match snapshot(&handle, &task.association.session_id, None, true).await {
-                        Ok(snapshot) => {
-                            let _ = output
-                                .send_associated(task.association.clone(), snapshot)
-                                .await;
-                        }
-                        Err(error) => {
-                            let _ = output
-                                .send_associated(
-                                    task.association.clone(),
-                                    error_event(
-                                        "history",
-                                        Some(&task.association.session_id),
-                                        &error,
-                                    ),
-                                )
-                                .await;
+            if !output.is_closed() {
+                match client.call::<List>("session.list", json!({})).await {
+                    Ok(list) => {
+                        for item in list
+                            .sessions
+                            .into_iter()
+                            .filter(|item| item.metadata.id == frame.session_id)
+                        {
+                            let _ = output.send(SessionEvent::TitleUpdated(item.metadata)).await;
                         }
                     }
+                    Err(error) => {
+                        let _ = output.send(error_event("metadata", error)).await;
+                    }
                 }
-                let _ = output
-                    .send_associated(task.association.clone(), SessionEvent::Finished(finished))
-                    .await;
-                streams.remove(&task.association.session_id);
-                task.events.acknowledge_finished();
             }
+            continue;
+        }
+        let association = Association {
+            session_id: frame.session_id.clone(),
+            task_id: frame.task_id.context("task event has no task ID")?,
+            message_id: frame
+                .message_id
+                .context("task event has no input message ID")?,
+        };
+        if frame.event["type"] == "task_finished" {
+            let finished: TaskFinished = serde_json::from_value(frame.event)?;
+            if finished.history_required && !output.is_closed() {
+                match snapshot(&client, &frame.session_id, None, true).await {
+                    Ok(event) => {
+                        let _ = output.send_associated(association.clone(), event).await;
+                    }
+                    Err(error) => {
+                        let _ = output
+                            .send_associated(association.clone(), error_event("history", error))
+                            .await;
+                    }
+                }
+            }
+            let _ = output
+                .send_associated(association, SessionEvent::Finished(finished))
+                .await;
+            streams.remove(&frame.session_id);
+        } else {
+            let mut value = frame.event;
+            if value["type"] == "task_started" {
+                value["task_id"] = json!(association.task_id);
+                value["message_id"] = json!(association.message_id);
+            }
+            let event: AgentEvent = serde_json::from_value(value)?;
+            let _ = output
+                .send_associated(
+                    association,
+                    SessionEvent::Agent {
+                        session_id: frame.session_id,
+                        event,
+                    },
+                )
+                .await;
         }
     }
     Ok(())

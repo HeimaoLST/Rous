@@ -16,8 +16,8 @@ use super::{
     textwrap, theme,
 };
 use crate::{
-    agent::{AgentEvent, journal::TaskStatus},
-    session::{SessionCommand, SessionEvent, runtime::Association, store::SessionSummary},
+    client::{AgentEvent, Association, SessionSummary, history::TaskStatus},
+    session::{SessionCommand, SessionEvent},
 };
 
 pub struct Picker {
@@ -116,10 +116,10 @@ fn pop_last_grapheme(text: &mut String) {
 /// identity so late events cannot cross tasks and a finished task is not
 /// finalized twice.
 struct OpenedData {
-    metadata: crate::session::store::SessionMetadata,
-    replay: crate::agent::journal::Replay,
+    metadata: crate::client::SessionMetadata,
+    replay: crate::client::history::History,
     context: AgentEvent,
-    state: crate::session::runtime::SessionState,
+    state: crate::client::SessionState,
     stream: Option<Association>,
 }
 
@@ -183,7 +183,7 @@ impl Sessions {
         app: &mut App,
         editor: &mut Editor,
         association: Association,
-        message: &crate::agent::message::UserMessage,
+        message: &crate::input::UserInput,
     ) {
         if app
             .session
@@ -423,10 +423,10 @@ impl Sessions {
     fn history_restored(
         &mut self,
         app: &mut App,
-        metadata: crate::session::store::SessionMetadata,
-        replay: crate::agent::journal::Replay,
+        metadata: crate::client::SessionMetadata,
+        replay: crate::client::history::History,
         context: AgentEvent,
-        _state: crate::session::runtime::SessionState,
+        _state: crate::client::SessionState,
         association: Option<Association>,
     ) {
         let target = metadata.id.clone();
@@ -483,7 +483,7 @@ impl Sessions {
     fn metadata_update(
         &mut self,
         app: &mut App,
-        metadata: crate::session::store::SessionMetadata,
+        metadata: crate::client::SessionMetadata,
         renamed: bool,
     ) {
         if app
@@ -580,7 +580,7 @@ impl Sessions {
     fn finished(
         &mut self,
         app: &mut App,
-        finished: crate::session::runtime::TaskFinished,
+        finished: crate::client::TaskFinished,
         association: Option<Association>,
     ) {
         let target = association
@@ -677,7 +677,7 @@ fn finish_app(
     canonical_slot: &mut Option<String>,
     incoming: Option<&Association>,
     task_id: Option<&str>,
-    finished: &crate::session::runtime::TaskFinished,
+    finished: &crate::client::TaskFinished,
 ) {
     let Some(incoming) = incoming else {
         return;
@@ -693,7 +693,7 @@ fn finish_app(
     }
     let canonical = task_id.is_some_and(|task_id| canonical_slot.as_deref() == Some(task_id));
     if !canonical {
-        let event = match finished.status {
+        let event = match finished.status.as_str() {
             "completed" => AgentEvent::TurnCompleted,
             "interrupted" => AgentEvent::TurnInterrupted,
             _ => AgentEvent::TurnFailed {
@@ -716,7 +716,7 @@ fn finish_app(
     if let Some(error) = &finished.error {
         notes.push(format!("{}: {}", error.code, error.message));
     }
-    if let Some(persistence) = finished.persistence {
+    if let Some(persistence) = &finished.persistence {
         notes.push(format!("persistence: {persistence}"));
     }
     if finished.history_required && !canonical {
@@ -952,7 +952,7 @@ impl Sessions {
                 } else {
                     ""
                 };
-                let seconds = crate::agent::journal::now_ms()
+                let seconds = crate::client::history::now_ms()
                     .unwrap_or(session.updated_at)
                     .saturating_sub(session.updated_at)
                     / 1000;

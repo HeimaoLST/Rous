@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::{Sender, error::TrySendError};
 
 use crate::{
-    agent::message::UserMessage,
+    input::UserInput,
     session::{SessionCommand, SessionRequest},
 };
 
@@ -18,7 +18,7 @@ pub(crate) enum PendingRequest {
     /// is still the composer's; it is cleared only on acceptance.
     Send {
         session_id: String,
-        message: UserMessage,
+        message: UserInput,
     },
     Command {
         draft: String,

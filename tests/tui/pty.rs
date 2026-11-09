@@ -2,7 +2,7 @@
 //! TTY-only lifecycle fixture. The child test enters a real `TerminalSession`
 //! on a PTY and then panics; the parent drains the PTY concurrently and
 //! verifies the PTY is back in cooked mode. Run explicitly:
-//! `cargo test --bin Saki frontend::tui::tests::pty::pty_panic_restores_terminal -- --ignored --exact`
+//! `cargo test --bin rous frontend::tui::tests::pty::pty_panic_restores_terminal -- --ignored --exact`
 
 use std::os::fd::FromRawFd;
 use std::process::{Command, Stdio};

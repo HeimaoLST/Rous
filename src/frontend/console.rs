@@ -6,18 +6,17 @@ use std::{
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::Sender;
 
-use crate::agent::AgentEvent;
+use crate::client::AgentEvent;
 use crate::frontend::session_requests::{PendingRequest, RequestSendError, SessionRequests};
 use crate::{
-    agent::{
-        journal::{JournalRecord, TaskStatus},
-        message::UserMessage,
+    client::{
+        Association,
+        history::{HistoryEntry, TaskStatus},
+        types::{InputItem, InputMessageContent, MessageRole},
     },
     command::{self, Command, ParsedInput},
-    protocol::{InputItem, InputMessageContent, MessageRole},
-    session::{
-        SessionCommand, SessionEvent, SessionEventReceiver, SessionRequest, runtime::Association,
-    },
+    input::UserInput,
+    session::{SessionCommand, SessionEvent, SessionEventReceiver, SessionRequest},
 };
 
 /// Independent plain-text front end.
@@ -55,7 +54,7 @@ async fn run_with_io<R: AsyncBufRead + Unpin, W: Write>(
     let mut running = false;
     let mut sending = false;
     let mut eof = false;
-    let mut queue = VecDeque::<UserMessage>::new();
+    let mut queue = VecDeque::<UserInput>::new();
     let mut pending: Option<(u64, Command, String)> = None;
     let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
     loop {
@@ -191,7 +190,7 @@ async fn run_with_io<R: AsyncBufRead + Unpin, W: Write>(
                         output.close_block()?;
                         writeln!(output.writer, "Session: {} ({})", metadata.title, metadata.id)?;
                         output.restore(&replay)?;
-                        if matches!(replay.status, TaskStatus::Interrupted | TaskStatus::Unknown) && replay.context.len() > 1 {
+                        if matches!(replay.status, TaskStatus::Interrupted | TaskStatus::Unknown) && replay.has_task_history() {
                             writeln!(output.writer, "Previous task: {:?}. Nothing was re-executed.", replay.status)?;
                         }
                         session_id = Some(metadata.id);
@@ -225,7 +224,7 @@ async fn run_with_io<R: AsyncBufRead + Unpin, W: Write>(
                             let start = replay.history.iter().position(|record| {
                                 matches!(
                                     record,
-                                    JournalRecord::TaskStarted { task_id: id, .. } if *id == task_id
+                                    HistoryEntry::TaskStarted { task_id: id, .. } if *id == task_id
                                 )
                             });
                             if let Some(start) = start {
@@ -281,13 +280,13 @@ async fn run_with_io<R: AsyncBufRead + Unpin, W: Write>(
                             sending = false;
                             output.close_block()?;
                             output.reset_task();
-                            match finished.status {
+                            match finished.status.as_str() {
                                 "completed" => {}
                                 "interrupted" => writeln!(output.writer, "Task interrupted.")?,
                                 _ => {
                                     let (message, code) = finished.error.as_ref().map_or_else(
                                         || ("Task failed.".to_owned(), "unknown"),
-                                        |error| (error.message.clone(), error.code),
+                                        |error| (error.message.clone(), error.code.as_str()),
                                     );
                                     writeln!(output.writer, "Task failed: {message} ({code})")?;
                                 }
@@ -364,7 +363,7 @@ impl<W: Write> ConsoleOutput<W> {
         self.prompt()
     }
 
-    fn restore(&mut self, replay: &crate::agent::journal::Replay) -> std::io::Result<()> {
+    fn restore(&mut self, replay: &crate::client::history::History) -> std::io::Result<()> {
         self.restore_slice(&replay.history, 0, true)
     }
 
@@ -372,7 +371,7 @@ impl<W: Write> ConsoleOutput<W> {
     /// for associated append-only HistoryRestored repair of one task.
     fn restore_slice(
         &mut self,
-        records: &[JournalRecord],
+        records: &[HistoryEntry],
         base: usize,
         include_terminal: bool,
     ) -> std::io::Result<()> {
@@ -380,7 +379,7 @@ impl<W: Write> ConsoleOutput<W> {
         for (offset, record) in records.iter().enumerate() {
             let index = base + offset;
             match record {
-                JournalRecord::Messages { items } => {
+                HistoryEntry::Messages { items } => {
                     for (part, item) in items.iter().enumerate() {
                         let item_id = format!("history-{index}-{part}");
                         match item {
@@ -390,12 +389,12 @@ impl<W: Write> ConsoleOutput<W> {
                                     InputMessageContent::Parts(parts) => parts
                                         .iter()
                                         .map(|part| match part {
-                                            crate::protocol::InputContentPart::Text { text } => {
-                                                text.clone()
-                                            }
-                                            crate::protocol::InputContentPart::Image { .. } => {
-                                                "[image]".to_owned()
-                                            }
+                                            crate::client::types::InputContentPart::Text {
+                                                text,
+                                            } => text.clone(),
+                                            crate::client::types::InputContentPart::Image {
+                                                ..
+                                            } => "[image]".to_owned(),
                                         })
                                         .collect::<Vec<_>>()
                                         .join("\n"),
@@ -438,7 +437,7 @@ impl<W: Write> ConsoleOutput<W> {
                         }
                     }
                 }
-                JournalRecord::Compaction {
+                HistoryEntry::Compaction {
                     tokens_before,
                     tokens_after,
                     usage,
@@ -448,7 +447,7 @@ impl<W: Write> ConsoleOutput<W> {
                     tokens_after: *tokens_after,
                     summary_output_tokens: usage.as_ref().and_then(|usage| usage.output_tokens),
                 })?,
-                JournalRecord::TaskFinished {
+                HistoryEntry::TaskFinished {
                     error: Some(error), ..
                 } if include_terminal => writeln!(self.writer, "Task failed: {error}")?,
                 _ => {}
