@@ -1,1 +1,0 @@
-On `check` failure with symptom E17, run `inspect`; if `required.retry_budget` differs from config/current.json, run `resolve E17` and edit `retry_budget` to the returned value (3). Verify `check` passes.

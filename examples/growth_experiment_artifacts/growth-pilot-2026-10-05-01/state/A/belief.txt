@@ -1,1 +1,0 @@
-If `check` fails with E17, run `inspect`/`resolve E17` to get the required `retry_budget` (trace: 3), then edit that key to the resolved value; this made `check.pass` true. README's generic "increase retry_budget" alone isn't enough.

@@ -1,0 +1,269 @@
+{
+  "product": "rous",
+  "source_repository": "https://github.com/HeimaoLST/Saki",
+  "source_commit": "00298ae22bb95afc11366597e517a3b1ceba21e7",
+  "source_tree": "d65528fc5d1975444dcff184d4354b1b04a73549",
+  "history": "original commits retained; product adaptation uses ordinary new commits",
+  "files": [
+    {
+      "source": "Cargo.lock",
+      "target": "Cargo.lock",
+      "blob": "52863ce3421de896c61cea32fa731b9b2598c206"
+    },
+    {
+      "source": "Cargo.toml",
+      "target": "Cargo.toml",
+      "blob": "dac5ec68c0a542c8e7a0ce7108568296f47f26c6"
+    },
+    {
+      "source": "docs/design/command-system.md",
+      "target": "docs/design/command-system.md",
+      "blob": "3cc35a93e90a5ddc2bd84997d3489c31715346af"
+    },
+    {
+      "source": "docs/design/previews/tui-layouts.html",
+      "target": "docs/design/previews/tui-layouts.html",
+      "blob": "637ebaf72bf2d478f13faed02e25692fe3631279"
+    },
+    {
+      "source": "docs/design/previews/tui-style.html",
+      "target": "docs/design/previews/tui-style.html",
+      "blob": "142fbf1b2cea0975676de367a8ff61295b3ec7ea"
+    },
+    {
+      "source": "docs/design/tui-style.md",
+      "target": "docs/design/tui-style.md",
+      "blob": "c8b107f9025601ab60507ec324a01dc99b521449"
+    },
+    {
+      "source": "docs/design/tui.md",
+      "target": "docs/design/tui.md",
+      "blob": "23be46583a2c468d925f5abb2f69ec9bcc8a8e86"
+    },
+    {
+      "source": "src/command/mod.rs",
+      "target": "src/command/mod.rs",
+      "blob": "84024eedf93e0e9974c7100fd231c1408a38ffd1"
+    },
+    {
+      "source": "src/frontend/console.rs",
+      "target": "src/frontend/console.rs",
+      "blob": "2bf6773ec372f3807783cb53915bcdcf0d0fccf3"
+    },
+    {
+      "source": "src/frontend/mod.rs",
+      "target": "src/frontend/mod.rs",
+      "blob": "66a6a2653d49cd61b9e10419e405378319c4a1e0"
+    },
+    {
+      "source": "src/frontend/session_requests.rs",
+      "target": "src/frontend/session_requests.rs",
+      "blob": "745fb20e284471509e6c4cc7aad850d8950f5b04"
+    },
+    {
+      "source": "src/frontend/tui/code_highlight.rs",
+      "target": "src/frontend/tui/code_highlight.rs",
+      "blob": "0f73e70533cfee07a47d7cf59ab1fe1898986ac0"
+    },
+    {
+      "source": "src/frontend/tui/commands.rs",
+      "target": "src/frontend/tui/commands.rs",
+      "blob": "67015a8f001fbae03e371f1e239c23105c82d07b"
+    },
+    {
+      "source": "src/frontend/tui/editor.rs",
+      "target": "src/frontend/tui/editor.rs",
+      "blob": "c7803514009804eeeedfcd3ae5f976e6bfcc2802"
+    },
+    {
+      "source": "src/frontend/tui/external_editor.rs",
+      "target": "src/frontend/tui/external_editor.rs",
+      "blob": "8d981b49611d2b52fe465026dd61be5a8677acfc"
+    },
+    {
+      "source": "src/frontend/tui/help.rs",
+      "target": "src/frontend/tui/help.rs",
+      "blob": "2bb822984f58bc596d3fc2883be5c0839a508ed2"
+    },
+    {
+      "source": "src/frontend/tui/history.rs",
+      "target": "src/frontend/tui/history.rs",
+      "blob": "3f772f3453409956c2ab4da956e9bf18e0d440fe"
+    },
+    {
+      "source": "src/frontend/tui/log.rs",
+      "target": "src/frontend/tui/log.rs",
+      "blob": "dd39ea7b3b62933ce21055177ba9e74245c3b57c"
+    },
+    {
+      "source": "src/frontend/tui/markdown.rs",
+      "target": "src/frontend/tui/markdown.rs",
+      "blob": "1880c4e88e64a84c6f5b84fbe4cac1e7adb710c5"
+    },
+    {
+      "source": "src/frontend/tui/markdown_layout.rs",
+      "target": "src/frontend/tui/markdown_layout.rs",
+      "blob": "d824ab0ac20bc223380a082d444260bd8b7f5027"
+    },
+    {
+      "source": "src/frontend/tui/mod.rs",
+      "target": "src/frontend/tui/mod.rs",
+      "blob": "0eea36757c9997f1ff9109ec404effa75c778987"
+    },
+    {
+      "source": "src/frontend/tui/path_completion.rs",
+      "target": "src/frontend/tui/path_completion.rs",
+      "blob": "47af4a6a77d5403fd5909d90b549dd1a4bf9302f"
+    },
+    {
+      "source": "src/frontend/tui/selection.rs",
+      "target": "src/frontend/tui/selection.rs",
+      "blob": "e0bc0f0438e346aa8e10d01fb4da5320cd3f9cae"
+    },
+    {
+      "source": "src/frontend/tui/sessions.rs",
+      "target": "src/frontend/tui/sessions.rs",
+      "blob": "014b431ae9f5764c0212ce12d02bdb980019354c"
+    },
+    {
+      "source": "src/frontend/tui/state.rs",
+      "target": "src/frontend/tui/state.rs",
+      "blob": "0494ee7599aa878a9195d045b852811d1c3bea99"
+    },
+    {
+      "source": "src/frontend/tui/terminal.rs",
+      "target": "src/frontend/tui/terminal.rs",
+      "blob": "dec82f351caab8e8c709da54fad70c05f21318bf"
+    },
+    {
+      "source": "src/frontend/tui/terminal_input.rs",
+      "target": "src/frontend/tui/terminal_input.rs",
+      "blob": "ae6979b860d340f362c1758dd42c04261657c345"
+    },
+    {
+      "source": "src/frontend/tui/textwrap.rs",
+      "target": "src/frontend/tui/textwrap.rs",
+      "blob": "38b785c02d5bd0b917af9cb8d25ad7c832b7f62d"
+    },
+    {
+      "source": "src/frontend/tui/theme.rs",
+      "target": "src/frontend/tui/theme.rs",
+      "blob": "fd0583ba82795acf857fdb660c70d32a3847baa5"
+    },
+    {
+      "source": "src/frontend/tui/transcript_search.rs",
+      "target": "src/frontend/tui/transcript_search.rs",
+      "blob": "2fedac7acb510e8b93784b458f80b640d93805b6"
+    },
+    {
+      "source": "src/frontend/tui/view.rs",
+      "target": "src/frontend/tui/view.rs",
+      "blob": "001615c4f1c9b6b5a5fc06cb9b3b497ae3624b17"
+    },
+    {
+      "source": "src/session/channel.rs",
+      "target": "src/session/channel.rs",
+      "blob": "f53e4882a3eac3ed39ed43d098384490c1ba8fe9"
+    },
+    {
+      "source": "src/session/terminal.rs",
+      "target": "src/session/terminal.rs",
+      "blob": "56365e84aaf146007feed5e7c1fbf82031fcf442"
+    },
+    {
+      "source": "tests/command/mod.rs",
+      "target": "tests/command/mod.rs",
+      "blob": "8e79db49b20428c987a83b99813d05801c775c0e"
+    },
+    {
+      "source": "tests/console/mod.rs",
+      "target": "tests/console/mod.rs",
+      "blob": "b2a282b6a9155ef9b7f35d9d46cb10ea4242fca3"
+    },
+    {
+      "source": "tests/console/startup.rs",
+      "target": "tests/console/startup.rs",
+      "blob": "199a03ec9a80ae0b1df77cbc8ef748ba0c930b40"
+    },
+    {
+      "source": "tests/tui/code_highlight_tests.rs",
+      "target": "tests/tui/code_highlight_tests.rs",
+      "blob": "1e0150149a69d73283c1685cc824ae1dafa3a7f0"
+    },
+    {
+      "source": "tests/tui/commands.rs",
+      "target": "tests/tui/commands.rs",
+      "blob": "8bbd571d25c4e3f24131c55b94ba429d9b68eed0"
+    },
+    {
+      "source": "tests/tui/external_editor_tests.rs",
+      "target": "tests/tui/external_editor_tests.rs",
+      "blob": "d825234a11b09c9cd8d12d85ce8f22210e09cba8"
+    },
+    {
+      "source": "tests/tui/images.rs",
+      "target": "tests/tui/images.rs",
+      "blob": "dc793d00b1513b71370197d7ede879c4ec5e5578"
+    },
+    {
+      "source": "tests/tui/input.rs",
+      "target": "tests/tui/input.rs",
+      "blob": "25ba839079fb3bd4522863f0361f7a5bcba95f1b"
+    },
+    {
+      "source": "tests/tui/mod.rs",
+      "target": "tests/tui/mod.rs",
+      "blob": "8038815f19b84786db8248267fe3718bc1ea78cc"
+    },
+    {
+      "source": "tests/tui/native_input.rs",
+      "target": "tests/tui/native_input.rs",
+      "blob": "7514fe8af6ee760cd7bdcd24cfcff52c017771ac"
+    },
+    {
+      "source": "tests/tui/path_completion_tests.rs",
+      "target": "tests/tui/path_completion_tests.rs",
+      "blob": "20a902fff37d6d9559922350f36a130d7c90d3e4"
+    },
+    {
+      "source": "tests/tui/pty.rs",
+      "target": "tests/tui/pty.rs",
+      "blob": "099a7a83ea71e79fde5251e0b41d0a5f76b63a03"
+    },
+    {
+      "source": "tests/tui/selection.rs",
+      "target": "tests/tui/selection.rs",
+      "blob": "d8c13106da4a009f2ed19c0416aa751959ad4b86"
+    },
+    {
+      "source": "tests/tui/semantic_colors.rs",
+      "target": "tests/tui/semantic_colors.rs",
+      "blob": "df2c9388089e97cac310605493f8bfba825601cd"
+    },
+    {
+      "source": "tests/tui/sessions.rs",
+      "target": "tests/tui/sessions.rs",
+      "blob": "c7e5ae4d1aed9f912a3673f071b0d21f29f52443"
+    },
+    {
+      "source": "tests/tui/style.rs",
+      "target": "tests/tui/style.rs",
+      "blob": "7ca55407169de58efc411071886fe31a35f63b75"
+    },
+    {
+      "source": "tests/tui/theme_auto.rs",
+      "target": "tests/tui/theme_auto.rs",
+      "blob": "6fac98a21040ba4ed09e9e0df12e297535c8ccaf"
+    },
+    {
+      "source": "tests/tui/transcript_search_tests.rs",
+      "target": "tests/tui/transcript_search_tests.rs",
+      "blob": "62b12c5c396d9b0252507b76f1bad92ae56961fe"
+    },
+    {
+      "source": "tests/tui/ux.rs",
+      "target": "tests/tui/ux.rs",
+      "blob": "ab323eeabc8fc16c23dd56ee2ef0feb1ac563120"
+    }
+  ]
+}

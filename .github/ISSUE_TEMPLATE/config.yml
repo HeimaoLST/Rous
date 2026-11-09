@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Saki 文档入口
-    url: https://github.com/HeimaoLST/Saki/blob/master/docs/README.md
-    about: 先查文档是否已有答案；长期事实以 docs/ 为准。
-  - name: Agent 协作协议
-    url: https://github.com/HeimaoLST/Saki/blob/master/AGENTS.md
-    about: 提交 issue 前请阅读多 agent 协作协议（消息格式、标签、状态机）。
