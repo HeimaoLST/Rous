@@ -8,7 +8,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{state::App, textwrap};
-use crate::agent::message::UserMessage;
+use crate::input::UserInput;
 
 /// Preview rows shown for one history entry before a truncation marker.
 const PREVIEW_LINES: usize = 4;
@@ -29,7 +29,7 @@ struct HistorySearch {
 /// It is not persisted.
 #[derive(Default)]
 pub struct InputHistory {
-    entries: Vec<UserMessage>,
+    entries: Vec<UserInput>,
     /// Index of the entry currently recalled, or `None` when not navigating.
     position: Option<usize>,
     search: Option<HistorySearch>,
@@ -49,12 +49,12 @@ impl InputHistory {
     }
 
     /// The recalled draft, used to decide whether Up/Down may keep navigating.
-    pub fn recalled(&self) -> Option<&UserMessage> {
+    pub fn recalled(&self) -> Option<&UserInput> {
         self.position.and_then(|index| self.entries.get(index))
     }
 
     /// Adds a submitted or cleared draft. Adjacent duplicates are collapsed.
-    pub fn push(&mut self, message: impl Into<UserMessage>) {
+    pub fn push(&mut self, message: impl Into<UserInput>) {
         let message = message.into();
         if message.is_empty() {
             return;
@@ -67,7 +67,7 @@ impl InputHistory {
     }
 
     /// Older entry, or `None` when there is nothing older to recall.
-    pub fn older(&mut self) -> Option<UserMessage> {
+    pub fn older(&mut self) -> Option<UserInput> {
         if self.entries.is_empty() {
             return None;
         }
@@ -82,7 +82,7 @@ impl InputHistory {
 
     /// Newer entry, or `None` when navigating past the newest (the caller then
     /// restores an empty draft).
-    pub fn newer(&mut self) -> Option<UserMessage> {
+    pub fn newer(&mut self) -> Option<UserInput> {
         let position = self.position?;
         if position + 1 < self.entries.len() {
             self.position = Some(position + 1);
@@ -166,7 +166,7 @@ impl InputHistory {
     /// the caller can set the draft; ordinary navigation then continues from
     /// the accepted entry. `None` when there is no match, in which case the
     /// search stays open with the query and draft unchanged.
-    pub fn accept_search(&mut self) -> Option<UserMessage> {
+    pub fn accept_search(&mut self) -> Option<UserInput> {
         let index = {
             let search = self.search.as_ref()?;
             *search.matches.get(search.selected)?

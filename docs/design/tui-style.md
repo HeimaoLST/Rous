@@ -1,8 +1,10 @@
 # TUI style：统一的阅读与工作层次
 
+更新日期：2026-11-09。独立产品为 Rous；下文带日期的 Saki 验收属于历史构建。显示行为和原有配置名保留，执行归属见 [Rous 边界](tui.md)。
+
 状态：实验已实现；2026-10-15 起主题检测改为 Termina 原生输入 + OSC 10/11 采样（tmux 元数据路径已移除，历史验收见下方）。仍不声称物理 Ghostty 交互、OS 剪贴板或真实模型生成已验证。本文已按实际实现修订；历史设计判断保留在对应小节。
 
-依据是用户实测截图、当前 renderer 和 [Pi／Codex 显示研究](../research/systems/terminal-presentation.md)。[现有 TUI](tui.md) 继续记录已实现行为。所有产品文案使用英文。`previews/tui-style.html` 是交互设计示意，内容与执行记录为样例，不构成新的项目统计或真实执行证据。
+依据是用户实测截图、当前 renderer 和 [Pi／Codex 显示研究](https://github.com/HeimaoLST/Saki/blob/00298ae22bb95afc11366597e517a3b1ceba21e7/docs/research/systems/terminal-presentation.md)。[现有 TUI](tui.md) 继续记录已实现行为。所有产品文案使用英文。`previews/tui-style.html` 是交互设计示意，内容与执行记录为样例，不构成新的项目统计或真实执行证据。
 
 ## 实验实现：已支持的行为
 

@@ -496,8 +496,8 @@ fn ctrl_c_closes_the_log_before_touching_the_draft() {
     let _ = std::fs::remove_file(&path);
 }
 
-fn image(name: &str) -> crate::agent::message::ImageAttachment {
-    crate::agent::message::ImageAttachment::new(name, "data:image/png;base64,AA")
+fn image(name: &str) -> crate::input::ImageAttachment {
+    crate::input::ImageAttachment::new(name, "data:image/png;base64,AA")
 }
 
 fn render_history(app: &App, width: u16) -> String {
@@ -514,7 +514,7 @@ fn ctrl_r_opens_history_search_and_leaves_the_draft_untouched() {
     app.history.push("older prompt".to_owned());
     app.history.push("newer prompt".to_owned());
     let mut editor = Editor::new();
-    editor.set_draft(crate::agent::message::UserMessage {
+    editor.set_draft(crate::input::UserInput {
         context: Vec::new(),
         text: "keep me".into(),
         images: vec![image("a.png")],
@@ -548,7 +548,7 @@ fn history_search_cancel_restores_the_exact_editor_state() {
     let mut app = App::new();
     app.history.push("history one".to_owned());
     let mut editor = Editor::new();
-    editor.set_draft(crate::agent::message::UserMessage {
+    editor.set_draft(crate::input::UserInput {
         context: Vec::new(),
         text: "keep\ndraft".into(),
         images: vec![image("a.png")],
@@ -650,7 +650,7 @@ fn history_search_f1_closes_search_and_opens_help() {
     let mut app = App::new();
     app.history.push("saved".to_owned());
     let mut editor = Editor::new();
-    editor.set_draft(crate::agent::message::UserMessage {
+    editor.set_draft(crate::input::UserInput {
         context: Vec::new(),
         text: "draft".into(),
         images: vec![image("a.png")],
@@ -713,7 +713,7 @@ fn history_search_overlay_keeps_the_hint_with_a_tall_composer() {
     app.theme = crate::frontend::tui::theme::Theme::dark();
     app.history
         .push("first line\nsecond line\nthird line".to_owned());
-    app.history.push(crate::agent::message::UserMessage {
+    app.history.push(crate::input::UserInput {
         context: Vec::new(),
         text: "target one is a long prompt that does not fit one row\nsecond line of that prompt"
             .into(),
@@ -994,11 +994,11 @@ fn undo_restores_multiline_cursor() {
 #[test]
 fn undo_restores_attachments_and_shares_payload() {
     let mut editor = Editor::new();
-    editor.insert_image(crate::agent::message::ImageAttachment::new(
+    editor.insert_image(crate::input::ImageAttachment::new(
         "a.png",
         "data:image/png;base64,AAA",
     ));
-    editor.insert_image(crate::agent::message::ImageAttachment::new(
+    editor.insert_image(crate::input::ImageAttachment::new(
         "b.png",
         "data:image/png;base64,BBB",
     ));

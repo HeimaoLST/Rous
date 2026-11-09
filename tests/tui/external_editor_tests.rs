@@ -80,7 +80,7 @@ fn failed_result_preserves_exact_draft_cursor_images_and_history() {
     app.last_height = 8;
     let mut editor = Editor::new();
     editor.insert_str("keep\ndraft");
-    editor.insert_image(crate::agent::message::ImageAttachment::new(
+    editor.insert_image(crate::input::ImageAttachment::new(
         "a.png",
         "data:image/png;base64,AA",
     ));

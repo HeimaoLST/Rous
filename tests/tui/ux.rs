@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::message::ImageAttachment;
+use crate::input::ImageAttachment;
 use std::time::{Duration, Instant};
 
 fn render(app: &mut App, editor: &Editor, width: u16, height: u16) -> String {
@@ -32,10 +32,10 @@ fn streaming_updates_one_record_reflows_cached_text_and_preserves_reading_positi
             message_id: None,
         },
         AgentEvent::ModelRequestStarted {
-            purpose: crate::agent::ModelRequestPurpose::Generation,
+            purpose: crate::client::ModelRequestPurpose::Generation,
         },
         AgentEvent::ModelRequestStarted {
-            purpose: crate::agent::ModelRequestPurpose::Compaction,
+            purpose: crate::client::ModelRequestPurpose::Compaction,
         },
     ] {
         app.apply_event(event);
@@ -892,7 +892,7 @@ fn turn_interrupted_marks_the_real_activity_group_and_closes_the_running_tool() 
     app.apply_event(AgentEvent::ToolFinished {
         call_id: "c".into(),
         name: "bash".into(),
-        output: crate::agent::conversation::Conversation::interrupted_tool_output(),
+        output: json!({"error":"tool interrupted","interrupted":true}),
     });
     app.apply_event(AgentEvent::TurnInterrupted);
     assert!(!app.running && !app.cancelling && app.status.is_none());

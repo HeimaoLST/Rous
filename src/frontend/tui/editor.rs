@@ -3,7 +3,7 @@ use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent::message::{ImageAttachment, UserMessage};
+use crate::input::{ImageAttachment, UserInput};
 
 /// Codex-style word separator run; word motion treats these as one piece.
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
@@ -253,10 +253,10 @@ impl Editor {
 
     /// Clears the draft for the Ctrl+C path: the clear stays undoable while the
     /// returned draft is stored in the input history.
-    pub fn clear_for_history(&mut self) -> UserMessage {
+    pub fn clear_for_history(&mut self) -> UserInput {
         let text = self.text();
         if self.is_empty() {
-            return UserMessage {
+            return UserInput {
                 context: Vec::new(),
                 text,
                 images: Vec::new(),
@@ -265,7 +265,7 @@ impl Editor {
         self.checkpoint(false);
         let images = self.take_images();
         self.clear_state();
-        UserMessage {
+        UserInput {
             context: Vec::new(),
             text,
             images,
@@ -274,27 +274,27 @@ impl Editor {
 
     /// Copy of the current draft for a pending send. The editor keeps its
     /// contents until the Runtime acceptance reply.
-    pub fn draft_message(&self) -> UserMessage {
-        UserMessage {
+    pub fn draft_message(&self) -> UserInput {
+        UserInput {
             context: Vec::new(),
             text: self.text(),
             images: self.images().to_vec(),
         }
     }
 
-    pub fn matches_message(&self, message: &UserMessage) -> bool {
+    pub fn matches_message(&self, message: &UserInput) -> bool {
         self.text() == message.text && self.images() == message.images.as_slice()
     }
 
     /// Removes and returns the draft, e.g. when submitting a message. The
     /// image snapshots are moved, not cloned, and undo history is reset so an
     /// executed task can never be undone.
-    pub fn take(&mut self) -> UserMessage {
+    pub fn take(&mut self) -> UserInput {
         let text = self.text();
         self.reset_history();
         let images = self.take_images();
         self.clear_state();
-        UserMessage {
+        UserInput {
             context: Vec::new(),
             text,
             images,
@@ -303,7 +303,7 @@ impl Editor {
 
     /// Replaces the whole draft (history recall) with the cursor at the end.
     /// The replacement is one undoable edit; the kill buffer survives.
-    pub fn set_draft(&mut self, message: impl Into<UserMessage>) {
+    pub fn set_draft(&mut self, message: impl Into<UserInput>) {
         let message = message.into();
         if self.text() == message.text && self.images.as_slice() == message.images.as_slice() {
             self.end_typing();

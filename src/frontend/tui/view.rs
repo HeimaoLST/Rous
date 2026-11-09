@@ -11,7 +11,6 @@ use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent::message::ImageAttachment;
 use crate::frontend::tui::editor::Editor;
 use crate::frontend::tui::help;
 use crate::frontend::tui::log;
@@ -24,6 +23,7 @@ use crate::frontend::tui::state::{
 use crate::frontend::tui::textwrap::wrap_bytes;
 use crate::frontend::tui::theme;
 use crate::frontend::tui::transcript_search;
+use crate::input::ImageAttachment;
 
 /// Draws the whole screen. Only the records needed to fill the transcript
 /// viewport are laid out, so long history does not build one big buffer.

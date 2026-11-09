@@ -21,10 +21,10 @@ fn deltas_flush_immediately_and_final_text_does_not_repeat() {
             message_id: None,
         },
         AgentEvent::ModelRequestStarted {
-            purpose: crate::agent::ModelRequestPurpose::Generation,
+            purpose: crate::client::ModelRequestPurpose::Generation,
         },
         AgentEvent::ModelRequestStarted {
-            purpose: crate::agent::ModelRequestPurpose::Compaction,
+            purpose: crate::client::ModelRequestPurpose::Compaction,
         },
     ] {
         output.apply_event(event).unwrap();
@@ -91,35 +91,61 @@ fn reasoning_end_closes_the_block_and_final_response_does_not_repeat_it() {
     );
 }
 
-fn session_fixture() -> (
-    std::path::PathBuf,
-    crate::session::store::SessionStore,
-    String,
-) {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "saki-command-console-{}-{}",
-        crate::agent::journal::new_id().unwrap(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
+struct FixtureSessions(
+    std::sync::Mutex<std::collections::HashMap<String, crate::client::SessionMetadata>>,
+);
+impl FixtureSessions {
+    fn metadata(&self, id: &str) -> anyhow::Result<crate::client::SessionMetadata> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("fixture session missing"))
+    }
+    fn create(&self) -> anyhow::Result<String> {
+        let id = crate::client::history::new_id()?;
+        self.0.lock().unwrap().insert(
+            id.clone(),
+            crate::client::tests::metadata(&id, "New session"),
+        );
+        Ok(id)
+    }
+    fn rename(&self, id: &str, title: &str) -> anyhow::Result<crate::client::SessionMetadata> {
+        let mut entries = self.0.lock().unwrap();
+        let item = entries.get_mut(id).unwrap();
+        item.title = title.into();
+        Ok(item.clone())
+    }
+    fn list(&self) -> anyhow::Result<Vec<crate::client::SessionSummary>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .values()
+            .map(|metadata| crate::client::SessionSummary {
+                metadata: metadata.clone(),
+                updated_at: 0,
+                status: crate::client::history::TaskStatus::Unknown,
+                in_use: false,
+                unavailable: None,
+            })
+            .collect())
+    }
+}
+fn session_fixture() -> (std::path::PathBuf, FixtureSessions, String) {
+    let root = std::env::temp_dir().join(crate::client::history::new_id().unwrap());
     std::fs::create_dir(&root).unwrap();
-    let store = crate::session::store::SessionStore::new(root.join("sessions")).unwrap();
-    let id = store
-        .create(
-            &root,
-            "test",
-            "system",
-            crate::agent::conversation::CompactionConfig::new(262_144),
-        )
-        .unwrap();
+    let store = FixtureSessions(Default::default());
+    let id = store.create().unwrap();
     (root, store, id)
 }
-fn idle_state(id: &str) -> crate::session::runtime::SessionState {
-    crate::session::runtime::SessionState {
+fn idle_state(id: &str) -> crate::client::SessionState {
+    crate::client::SessionState {
         session_id: id.to_owned(),
         metadata: None,
         loaded: true,
-        state: "idle",
+        state: "idle".into(),
         unavailable: None,
         active_task: None,
         status: "idle".to_owned(),
@@ -129,34 +155,33 @@ fn idle_state(id: &str) -> crate::session::runtime::SessionState {
     }
 }
 
-fn snapshot_event(store: &crate::session::store::SessionStore, id: &str) -> SessionEvent {
-    let loaded = store.open(id).unwrap();
-    let state = idle_state(&loaded.metadata.id);
+fn snapshot_event(store: &FixtureSessions, id: &str) -> SessionEvent {
+    let metadata = store.0.lock().unwrap()[id].clone();
     SessionEvent::Opened {
-        metadata: loaded.metadata,
-        replay: loaded.replay,
+        state: idle_state(id),
+        metadata,
+        replay: crate::client::history::History::default(),
         context: AgentEvent::ContextUpdated {
             model: "test".into(),
             context_tokens: None,
-            context_window: Some(262_144),
-            input_limit: Some(253_952),
+            context_window: Some(262144),
+            input_limit: Some(253952),
         },
-        state,
         stream: None,
     }
 }
 
-fn association(id: &str, task: &str) -> crate::session::runtime::Association {
-    crate::session::runtime::Association {
+fn association(id: &str, task: &str) -> crate::client::Association {
+    crate::client::Association {
         session_id: id.to_owned(),
         task_id: task.to_owned(),
         message_id: format!("{task}-message"),
     }
 }
 
-fn finished(status: &'static str) -> crate::session::runtime::TaskFinished {
-    crate::session::runtime::TaskFinished {
-        status,
+fn finished(status: &'static str) -> crate::client::TaskFinished {
+    crate::client::TaskFinished {
+        status: status.into(),
         error: None,
         persistence: None,
         history_required: false,
@@ -173,11 +198,10 @@ async fn console_local_commands_use_session_operations_and_never_send_model_mess
     let (events, rx): (
         crate::session::SessionEventSender,
         crate::session::SessionEventReceiver,
-    ) = crate::session::channel::channel(crate::agent::events::OutputState::default());
+    ) = crate::session::channel::channel();
     events.send(snapshot_event(&store, &id)).await.unwrap();
     let backend = {
         let events = events.clone();
-        let root = root.clone();
         async move {
             let mut operations = Vec::new();
             while let Some(request) = requests.recv().await {
@@ -196,14 +220,7 @@ async fn console_local_commands_use_session_operations_and_never_send_model_mess
                     }
                     SessionCommand::Create => {
                         operations.push("create");
-                        let new = store
-                            .create(
-                                &root,
-                                "test",
-                                "system",
-                                crate::agent::conversation::CompactionConfig::new(262_144),
-                            )
-                            .unwrap();
+                        let new = store.create().unwrap();
                         snapshot_event(&store, &new)
                     }
                     SessionCommand::Open { session_id } => {
@@ -211,7 +228,7 @@ async fn console_local_commands_use_session_operations_and_never_send_model_mess
                         if session_id == "missing" {
                             SessionEvent::Error {
                                 operation: "open",
-                                error: crate::session::runtime::RuntimeError::new(
+                                error: crate::client::RuntimeError::new(
                                     "not_found",
                                     "session missing",
                                 ),
@@ -222,7 +239,7 @@ async fn console_local_commands_use_session_operations_and_never_send_model_mess
                     }
                     SessionCommand::Cancel { .. } => SessionEvent::Error {
                         operation: "cancel",
-                        error: crate::session::runtime::RuntimeError::new("not_running", "missing"),
+                        error: crate::client::RuntimeError::new("not_running", "missing"),
                     },
                 };
                 events.send_reply(request_id, None, event).await.unwrap();
@@ -252,11 +269,10 @@ async fn console_local_commands_use_session_operations_and_never_send_model_mess
     assert!(text.contains("Compiler work"));
     assert!(text.contains("Input kept: /resume missing"));
     assert!(text.contains("Input kept: /resuem"));
-    for entry in std::fs::read_dir(root.join("sessions")).unwrap() {
-        let journal = std::fs::read_to_string(entry.unwrap().path().join("history.jsonl")).unwrap();
-        assert!(!journal.contains("task_started"));
-        assert!(!journal.contains("/help"));
-    }
+    assert!(
+        !text.contains("Tool started:"),
+        "local commands must remain local"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -268,7 +284,7 @@ async fn console_can_handle_commands_during_a_job_and_drain_piped_messages_after
     let (events, rx): (
         crate::session::SessionEventSender,
         crate::session::SessionEventReceiver,
-    ) = crate::session::channel::channel(crate::agent::events::OutputState::default());
+    ) = crate::session::channel::channel();
     events.send(snapshot_event(&store, &id)).await.unwrap();
     let backend = {
         let events = events.clone();
@@ -378,21 +394,20 @@ async fn console_can_handle_commands_during_a_job_and_drain_piped_messages_after
 
 #[tokio::test]
 async fn history_restored_repairs_authoritative_body_before_one_finished() {
-    use crate::agent::journal::{JournalRecord, Replay, TaskStatus};
-    use crate::protocol::{InputItem, InputMessageContent, MessageRole};
+    use crate::client::history::{History, HistoryEntry, TaskStatus};
+    use crate::client::types::{InputItem, InputMessageContent, MessageRole};
 
     let (root, store, id) = session_fixture();
     let task = "task-repair";
     let assoc = association(&id, task);
-    let replay = Replay {
-        context: Vec::new(),
+    let replay = History {
         history: vec![
-            JournalRecord::TaskStarted {
+            HistoryEntry::TaskStarted {
                 task_id: task.to_owned(),
                 message_id: Some(assoc.message_id.clone()),
                 configuration: None,
             },
-            JournalRecord::Messages {
+            HistoryEntry::Messages {
                 items: vec![
                     InputItem::Message {
                         role: MessageRole::User,
@@ -404,25 +419,20 @@ async fn history_restored_repairs_authoritative_body_before_one_finished() {
                     },
                 ],
             },
-            JournalRecord::TaskFinished {
+            HistoryEntry::TaskFinished {
                 task_id: task.to_owned(),
                 status: TaskStatus::Failed,
                 error: Some("canonical failure".into()),
             },
         ],
-        history_timestamps: vec![0; 3],
-        has_summary: false,
+
         status: TaskStatus::Failed,
-        updated_at: 0,
-        valid_bytes: 0,
-        needs_newline: false,
-        active_task: None,
     };
     let (tx, mut requests) = tokio::sync::mpsc::channel::<SessionRequest>(32);
     let (events, rx): (
         crate::session::SessionEventSender,
         crate::session::SessionEventReceiver,
-    ) = crate::session::channel::channel(crate::agent::events::OutputState::default());
+    ) = crate::session::channel::channel();
     events.send(snapshot_event(&store, &id)).await.unwrap();
     let backend = {
         let events = events.clone();
@@ -470,13 +480,13 @@ async fn history_restored_repairs_authoritative_body_before_one_finished() {
             events
                 .send_associated(
                     assoc,
-                    SessionEvent::Finished(crate::session::runtime::TaskFinished {
-                        status: "failed",
-                        error: Some(crate::session::runtime::RuntimeError::new(
+                    SessionEvent::Finished(crate::client::TaskFinished {
+                        status: "failed".into(),
+                        error: Some(crate::client::RuntimeError::new(
                             "model_error",
                             "late failure",
                         )),
-                        persistence: Some("unconfirmed"),
+                        persistence: Some("unconfirmed".into()),
                         history_required: true,
                     }),
                 )
@@ -524,21 +534,20 @@ async fn history_restored_repairs_authoritative_body_before_one_finished() {
 
 #[tokio::test]
 async fn history_restored_interrupted_is_reported_once_by_finished() {
-    use crate::agent::journal::{JournalRecord, Replay, TaskStatus};
-    use crate::protocol::{InputItem, InputMessageContent, MessageRole};
+    use crate::client::history::{History, HistoryEntry, TaskStatus};
+    use crate::client::types::{InputItem, InputMessageContent, MessageRole};
 
     let (root, store, id) = session_fixture();
     let task = "task-interrupted";
     let assoc = association(&id, task);
-    let replay = Replay {
-        context: Vec::new(),
+    let replay = History {
         history: vec![
-            JournalRecord::TaskStarted {
+            HistoryEntry::TaskStarted {
                 task_id: task.to_owned(),
                 message_id: Some(assoc.message_id.clone()),
                 configuration: None,
             },
-            JournalRecord::Messages {
+            HistoryEntry::Messages {
                 items: vec![
                     InputItem::Message {
                         role: MessageRole::User,
@@ -550,25 +559,20 @@ async fn history_restored_interrupted_is_reported_once_by_finished() {
                     },
                 ],
             },
-            JournalRecord::TaskFinished {
+            HistoryEntry::TaskFinished {
                 task_id: task.to_owned(),
                 status: TaskStatus::Interrupted,
                 error: None,
             },
         ],
-        history_timestamps: vec![0; 3],
-        has_summary: false,
+
         status: TaskStatus::Interrupted,
-        updated_at: 0,
-        valid_bytes: 0,
-        needs_newline: false,
-        active_task: None,
     };
     let (tx, mut requests) = tokio::sync::mpsc::channel::<SessionRequest>(32);
     let (events, rx): (
         crate::session::SessionEventSender,
         crate::session::SessionEventReceiver,
-    ) = crate::session::channel::channel(crate::agent::events::OutputState::default());
+    ) = crate::session::channel::channel();
     events.send(snapshot_event(&store, &id)).await.unwrap();
     let backend = {
         let events = events.clone();
@@ -602,10 +606,10 @@ async fn history_restored_interrupted_is_reported_once_by_finished() {
             events
                 .send_associated(
                     assoc,
-                    SessionEvent::Finished(crate::session::runtime::TaskFinished {
-                        status: "interrupted",
+                    SessionEvent::Finished(crate::client::TaskFinished {
+                        status: "interrupted".into(),
                         error: None,
-                        persistence: Some("unconfirmed"),
+                        persistence: Some("unconfirmed".into()),
                         history_required: true,
                     }),
                 )
@@ -649,7 +653,7 @@ async fn closed_command_mailbox_ends_console_without_retry_loop() {
     let (events, events_rx): (
         crate::session::SessionEventSender,
         crate::session::SessionEventReceiver,
-    ) = crate::session::channel::channel(crate::agent::events::OutputState::default());
+    ) = crate::session::channel::channel();
     events.send(snapshot_event(&store, &id)).await.unwrap();
     let mut output = Vec::new();
     let frontend = run_with_io(

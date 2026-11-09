@@ -276,7 +276,7 @@ fn activity_and_thought_disclosures_use_accent_labels() {
 }
 
 #[test]
-#[ignore = "manual rendered-color capture: cargo test --bin Saki semantic_render_capture -- --ignored --nocapture"]
+#[ignore = "manual rendered-color capture: cargo test --bin rous semantic_render_capture -- --ignored --nocapture"]
 fn semantic_render_capture_writes_actual_cells() {
     let mut html = String::from(
         "<!doctype html><meta charset=\"utf-8\"><title>SAKI semantic colors</title>\

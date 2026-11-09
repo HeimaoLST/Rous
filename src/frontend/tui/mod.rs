@@ -25,9 +25,9 @@ use crossterm::event::{
 };
 use tokio::sync::mpsc::Sender;
 
-use crate::agent::message::{self, ImageAttachment, UserMessage};
 use crate::command::{self, Command, ParsedInput};
 use crate::frontend::session_requests::{PendingRequest, RequestSendError, SessionRequests};
+use crate::input::{self as message, ImageAttachment, UserInput};
 use crate::session::{SessionCommand, SessionEvent, SessionEventReceiver, SessionRequest};
 use editor::Editor;
 use state::{App, Focus};
@@ -476,7 +476,7 @@ fn request_failed(app: &mut App, error: RequestSendError, full_message: &str) ->
 
 #[derive(Default)]
 pub struct KeyOutcome {
-    pub send: Option<UserMessage>,
+    pub send: Option<UserInput>,
     pub command: Option<Command>,
     pub copy: Option<String>,
     /// Ctrl+V intent; the run loop performs the actual clipboard IO.

@@ -1,0 +1,13 @@
+{
+  "status": "pinned",
+  "repository": "HeimaoLST/Saki",
+  "run_id": 42613582733,
+  "run_attempt": 1,
+  "source_sha": "a00c587e5407cd5b06b81470aad0fb8394710003",
+  "artifact_id": 13672370584,
+  "artifact_name": "saki-runtime-aarch64-apple-darwin-a00c587e5407cd5b06b81470aad0fb8394710003-run-42613582733-attempt-1",
+  "archive_sha256": "5c4626642edccaac56910b82a57fde20660682f8a6c926f71a536713405fea01",
+  "binary_sha256": "0f804ee96cd1a49df0b8e6508fc2308b208491b568d61135e2a4ef3a2fef532b",
+  "target": "aarch64-apple-darwin",
+  "protocol_version": 1
+}

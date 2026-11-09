@@ -209,7 +209,7 @@ fn completion_is_one_undo_and_keeps_images_and_noop_redo() {
     fs::write(dir.join("exact.txt"), "x").unwrap();
     let mut app = app_at(&dir);
     let mut editor = editor_with("cd un");
-    editor.insert_image(crate::agent::message::ImageAttachment::new(
+    editor.insert_image(crate::input::ImageAttachment::new(
         "a.png",
         "data:image/png;base64,AA",
     ));
